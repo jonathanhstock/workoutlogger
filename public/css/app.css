@@ -76,7 +76,9 @@
 
 /* ---------- Base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+/* Nothing may ever be wider than the screen: on iPhone, sideways overflow
+   lets the page zoom out and it won't snap back to its normal size. */
+html { -webkit-text-size-adjust: 100%; overflow-x: hidden; overflow-x: clip; }
 body {
   margin: 0;
   background: var(--bg);
@@ -86,6 +88,7 @@ body {
   -webkit-tap-highlight-color: transparent;
   padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 24px);
   overflow-x: hidden;
+  overflow-x: clip;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -96,7 +99,11 @@ input, select, textarea {
   padding: 10px 12px;
   min-height: var(--tap);
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
+/* Selects size to their longest option unless told otherwise. */
+select { text-overflow: ellipsis; }
 textarea { min-height: 80px; resize: vertical; }
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
   outline: 2px solid var(--accent);
@@ -386,10 +393,10 @@ button.idx:hover { background: var(--surface-2); }
 .delta.down-good { color: var(--good); }
 .delta.up-neutral { color: var(--text-2); }
 
-.dayhead-top { display: flex; align-items: center; gap: 8px; }
-.dayhead-top .dayname { flex: 1; min-width: 0; width: auto; }
-.planpick { display: flex; flex-direction: column; align-items: flex-end; gap: 0; flex: none; max-width: 52%; }
-.planpick select { min-height: 34px; padding: 4px 8px; font-size: 13px; width: auto; max-width: 100%; }
+.dayhead-top { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.planpick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.planpick > span { flex: none; }
+.planpick select { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 36px; padding: 4px 8px; font-size: 14px; }
 .day-note { margin: 0; font-size: 13px; color: var(--text-2); background: var(--surface-2); border-radius: var(--radius-sm); padding: 8px 10px; }
 .cue { font-size: 12px; color: var(--muted); margin-top: 3px; font-style: italic; }
 .entry.is-optional { opacity: .78; }
@@ -445,7 +452,7 @@ body.has-rest { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-botto
 .planitem .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
 .planitem .field input { text-align: left; font-weight: 400; }
 .planday-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.planday-foot select { width: auto; min-height: 34px; padding: 4px 8px; font-size: 13px; }
+.planday-foot select { flex: 1 1 120px; width: auto; min-width: 0; min-height: 34px; padding: 4px 8px; font-size: 13px; }
 
 /* ---------- Progress ---------- */
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
@@ -492,6 +499,7 @@ body.has-rest { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-botto
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .settings-row:last-child { border-bottom: 0; }
 .settings-row .stepper { width: 150px; }
+.settings-row select { flex: 0 1 auto; min-width: 0; }
 .ex-row { display: grid; grid-template-columns: minmax(0, 1fr) 128px 36px; gap: 6px; align-items: center; padding: 6px 0; }
 .ex-row input, .ex-row select { min-height: 38px; padding: 6px 10px; font-size: 14px; }
 

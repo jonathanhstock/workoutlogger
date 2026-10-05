@@ -349,6 +349,34 @@ describe('workout logbook in the browser', () => {
     await context.close();
   });
 
+  test('nothing is wider than a small phone screen (no zoom-out)', async () => {
+    const meta = await (await fetch(`${base}/`)).text();
+    assert.match(meta, /minimum-scale=1/);
+    for (const width of [320, 390]) {
+      const { context, page, errors } = await openApp({ ...PHONE, viewport: { width, height: 800 } });
+      // Day 3 has the longest name in the rotation picker.
+      await page.locator('.weekstrip button').nth(2).click();
+      await page.locator('.dayname[value^="Shoulders"]').waitFor();
+      for (const tab of ['Log', 'Plan', 'Progress', 'Settings']) {
+        await page.getByRole('button', { name: tab, exact: true }).click();
+        await page.waitForTimeout(100);
+        const wide = await page.evaluate(() => {
+          const vw = document.documentElement.clientWidth;
+          // Ignore content inside horizontally scrolling segmented controls.
+          return [...document.querySelectorAll('body *')]
+            .filter((el) => !el.closest('.seg') && el.getClientRects().length)
+            .filter((el) => el.getBoundingClientRect().right > vw + 0.5)
+            .map((el) => `${el.tagName}.${el.className}`)
+            .slice(0, 5);
+        });
+        assert.deepEqual(wide, [], `${tab} at ${width}px overflows: ${wide.join(', ')}`);
+        await noHorizontalScroll(page);
+      }
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+  });
+
   test('the rotation can be re-anchored after a missed day', async () => {
     const { context, page, errors } = await openApp();
     // Tomorrow would be Day 2; say we skipped and tomorrow is Day 1 again.
