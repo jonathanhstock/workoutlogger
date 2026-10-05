@@ -1835,6 +1835,20 @@ window.addEventListener('hashchange', () => {
   }
 });
 
+// Behave like a native app on phones: no pinch zoom. iOS Safari ignores
+// user-scalable=no in browser tabs, so also cancel its pinch gestures and
+// multi-finger moves. Desktop browser zoom (Ctrl/Cmd +/−) is unaffected.
+for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(type, (ev) => ev.preventDefault(), { passive: false });
+}
+document.addEventListener(
+  'touchmove',
+  (ev) => {
+    if (ev.touches.length > 1 || (ev.scale && ev.scale !== 1)) ev.preventDefault();
+  },
+  { passive: false },
+);
+
 // Pull changes from other devices when coming back to the app.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {

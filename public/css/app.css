@@ -88,6 +88,8 @@
 /* Nothing may ever be wider than the screen: on iPhone, sideways overflow
    lets the page zoom out and it won't snap back to its normal size. */
 html { -webkit-text-size-adjust: 100%; overflow-x: hidden; overflow-x: clip; }
+/* App-like feel on phones: no double-tap zoom anywhere. */
+html, body { touch-action: manipulation; }
 body {
   margin: 0;
   background: var(--bg);

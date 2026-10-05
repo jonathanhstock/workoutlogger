@@ -360,7 +360,7 @@ describe('workout logbook in the browser', () => {
 
   test('nothing is wider than a small phone screen (no zoom-out)', async () => {
     const meta = await (await fetch(`${base}/`)).text();
-    assert.match(meta, /minimum-scale=1/);
+    assert.match(meta, /minimum-scale=1, maximum-scale=1, user-scalable=no/);
     for (const width of [320, 390]) {
       const { context, page, errors } = await openApp({ ...PHONE, viewport: { width, height: 800 } });
       // Day 3 has the longest name in the rotation picker.
