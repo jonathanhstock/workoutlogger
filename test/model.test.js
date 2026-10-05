@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import * as M from '../public/js/model.js';
+import { VIDEOS, WORKOUT_VIDEOS, EXERCISES, youtubeId } from '../public/js/program.js';
 
 const D1 = '2026-10-05'; // set as rotation Day 1 in these tests (a Monday)
 
@@ -386,6 +387,30 @@ describe('cardio options and supersets', () => {
     assert.equal(n.exercises['incline-walk'].name, 'Incline Treadmill Walk');
     assert.equal(n.exercises.squat.name, 'Hack squat');
     assert.ok(n.exercises.stairmaster);
+  });
+});
+
+describe('exercise videos', () => {
+  test('every video belongs to a real exercise and has a valid YouTube id', () => {
+    const ids = new Set(EXERCISES.map((e) => e[0]));
+    for (const [exercise, list] of Object.entries(VIDEOS)) {
+      assert.ok(ids.has(exercise), `unknown exercise ${exercise}`);
+      for (const [title, url] of list) assert.match(youtubeId(url) || '', /^[\w-]{11}$/, `${exercise}: ${title}`);
+    }
+    for (const [title, url] of WORKOUT_VIDEOS) assert.ok(youtubeId(url), title);
+  });
+
+  test('youtubeId handles youtu.be and watch links', () => {
+    assert.equal(youtubeId('https://youtu.be/1uDiW5--rAE'), '1uDiW5--rAE');
+    assert.equal(youtubeId('https://www.youtube.com/watch?v=HG3cwzZ1lyo'), 'HG3cwzZ1lyo');
+    assert.equal(youtubeId('https://example.com'), null);
+  });
+
+  test('new exercises from the video list are in the library', () => {
+    const s = fresh();
+    for (const id of ['hang-clean', 'barbell-snatch', 'incline-barbell-bench', 'flat-barbell-bench', 'inner-chest-press', 'supinated-db-row', 'concentration-curl', 'reverse-curl', 'lying-leg-curl', 'pull-through', 'frog-pump', 'banded-side-walk', 'abductor']) {
+      assert.ok(s.exercises[id], id);
+    }
   });
 });
 

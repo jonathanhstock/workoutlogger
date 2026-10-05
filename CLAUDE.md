@@ -44,6 +44,10 @@ server-side storage, migrate to Postgres instead:
 - Cardio exercises declare which settings they log (`fields`: speed, incline,
   level), a default `target`, and a `cue`. Default cardio is the Incline
   Treadmill Walk at incline 12, 3.0 mph.
+- Form videos live in `VIDEOS` / `WORKOUT_VIDEOS` in `program.js` and show in
+  the Exercises tab. Every link is checked against YouTube oEmbed by
+  `npm run check-videos` (the `videos` CI job); add new links there and make
+  sure that job passes.
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
   timer between linked exercises; rest after the last one in the group.
   Stomach vacuums and cardio never use the rest timer.

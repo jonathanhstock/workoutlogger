@@ -40,6 +40,9 @@ export const EXERCISES = [
   ['flat-press', 'Flat / Decline Chest Press', 'strength', 'Chest'],
   ['cable-crossover', 'Cable Crossover / Pec Deck', 'strength', 'Chest'],
   ['dips', 'Dips', 'strength', 'Chest'],
+  ['incline-barbell-bench', 'Incline Barbell Bench Press', 'strength', 'Chest'],
+  ['flat-barbell-bench', 'Flat Barbell Bench Press', 'strength', 'Chest'],
+  ['inner-chest-press', 'Inner Chest Dumbbell Press', 'strength', 'Chest'],
 
   // Triceps
   ['triceps-pushdown', 'Triceps Pushdown (bar or rope)', 'strength', 'Triceps'],
@@ -58,6 +61,7 @@ export const EXERCISES = [
   ['straight-arm-pulldown', 'Straight-Arm Pulldown', 'strength', 'Back'],
   ['rack-pull', 'Rack Pull / Deadlift', 'strength', 'Back'],
   ['hyperextension', 'Hyperextension', 'strength', 'Back'],
+  ['supinated-db-row', 'Supinated Dumbbell Row', 'strength', 'Back'],
 
   // Biceps & forearms
   ['alt-curl', 'Alternating DB / EZ Bar Curl', 'strength', 'Biceps'],
@@ -65,6 +69,8 @@ export const EXERCISES = [
   ['ez-curl', 'Barbell / EZ Bar Curl', 'strength', 'Biceps'],
   ['db-curl', '2-Arm Dumbbell Curl', 'strength', 'Biceps'],
   ['wrist-curl', 'Wrist Curl', 'strength', 'Forearms'],
+  ['concentration-curl', 'Concentration Curl', 'strength', 'Biceps'],
+  ['reverse-curl', 'Reverse Curl', 'strength', 'Forearms'],
 
   // Shoulders & traps
   ['reverse-pec-deck', 'Reverse Pec Deck (rear delts)', 'strength', 'Shoulders'],
@@ -86,6 +92,15 @@ export const EXERCISES = [
   ['adductor', 'Adductor Machine', 'strength', 'Legs'],
   ['standing-calf', 'Standing Calf Raise', 'strength', 'Legs'],
   ['seated-calf', 'Seated Calf Raise', 'strength', 'Legs'],
+  ['lying-leg-curl', 'Lying Leg Curl', 'strength', 'Legs'],
+  ['abductor', 'Abductor Machine', 'strength', 'Glutes'],
+  ['pull-through', 'Cable Pull-Through', 'strength', 'Glutes'],
+  ['frog-pump', 'Frog Pump', 'strength', 'Glutes'],
+  ['banded-side-walk', 'Banded Side Walk', 'strength', 'Glutes'],
+
+  // Olympic lifts
+  ['hang-clean', 'Hang Clean', 'strength', 'Full body'],
+  ['barbell-snatch', 'Barbell Snatch', 'strength', 'Full body'],
 ];
 
 // Item helpers. `x` takes optional extras: setsMax, repsMax, scheme,
@@ -133,6 +148,89 @@ const coreCircuit = [
  * Fasted cardio lands 5 times per 8 days (~4–5×/week) and the core circuit
  * 3 times (~2–3×/week); vacuums every day.
  */
+// Form videos per exercise: [title, YouTube URL]. Every link is checked by
+// `npm run check-videos` (in CI) so a removed or private video is caught.
+export const VIDEOS = {
+  'incline-barbell-bench': [['Incline barbell bench press', 'https://youtu.be/SrqOu55lrYU']],
+  'flat-barbell-bench': [['Flat barbell bench press', 'https://youtu.be/ysUTNll8JQ8']],
+  'incline-db-press': [
+    ['Incline dumbbell bench press', 'https://youtu.be/hChjZQhX1Ls'],
+    ['Incline dumbbell bench press (2)', 'https://youtu.be/bDaIL_zKbGs'],
+  ],
+  'flat-press': [['Flat dumbbell bench press', 'https://youtu.be/Y_7aHqXeCfQ']],
+  'incline-machine-press': [['Incline Hammer Strength press machine', 'https://youtu.be/ig0NyNlSce4']],
+  'inner-chest-press': [['Inner chest dumbbell presses', 'https://youtu.be/WCAIi9xvNR8']],
+  'cable-crossover': [['Cable crossovers', 'https://youtu.be/1SoJVttMI1w']],
+  'skull-crusher': [['Skull crushers', 'https://youtu.be/Hdx3L8vjeeA']],
+  dips: [['Triceps dips', 'https://youtu.be/35PXVWP1XVs']],
+  'triceps-pushdown': [['Triceps push downs', 'https://youtu.be/REWv05om0ho']],
+  'close-grip-bench': [['Close grip barbell bench press', 'https://youtu.be/cXbSJHtjrQQ']],
+  row: [
+    ['Barbell rows', 'https://youtu.be/kBWAon7ItDw'],
+    ['T-bar row', 'https://youtu.be/OrrKhAcb62o'],
+  ],
+  'single-arm-row': [['Single arm dumbbell rows', 'https://youtu.be/EEFHHOCfHgw']],
+  'rack-pull': [
+    ['Rack pulls', 'https://youtu.be/aAjN8zS7Idg'],
+    ['Deadlifts', 'https://youtu.be/ytGaGIn3SjE'],
+  ],
+  'supinated-db-row': [['Supinated dumbbell rows', 'https://youtu.be/H75im9fAUMc']],
+  'seated-row': [['Seated cable rows', 'https://youtu.be/A77hAjcpN1s']],
+  hyperextension: [['Hyper extensions', 'https://youtu.be/vx0jZBEmZcE']],
+  'lat-pulldown-wide': [['Wide grip lat pulldowns', 'https://youtu.be/CAwf7n6Luuc']],
+  'lat-pulldown-close': [['Underhand close grip lat pulldown', 'https://youtu.be/D-aYXhHBDI8']],
+  'ez-curl': [['EZ bar and straight bar curls', 'https://youtu.be/prAKEcaMbRo']],
+  'alt-curl': [
+    ['EZ bar and straight bar curls', 'https://youtu.be/prAKEcaMbRo'],
+    ['Dumbbell curl', 'https://youtu.be/y01MQBNG-as'],
+  ],
+  'hammer-curl': [['Hammer curls', 'https://youtu.be/7jqi2qWAUJk']],
+  'db-curl': [['Dumbbell curl', 'https://youtu.be/y01MQBNG-as']],
+  'concentration-curl': [['Concentration curl', 'https://youtu.be/EOfAgBvyTMM']],
+  'reverse-curl': [['Reverse curls', 'https://youtu.be/nRgxYX2Ve9w']],
+  'shoulder-press': [['Dumbbell shoulder press', 'https://youtu.be/qEwKCR5JCog']],
+  'lateral-raise': [['Dumbbell lateral raises', 'https://youtu.be/zpUTA5i16kA']],
+  'front-raise': [['Dumbbell front raises', 'https://youtu.be/ALNyDCkW9y8']],
+  'reverse-pec-deck': [['Reverse pec deck (rear delts)', 'https://youtu.be/qdYLu49hg1c']],
+  'face-pull': [['Face pulls (rear delts)', 'https://youtu.be/V8dZ3pyiCBo']],
+  'upright-row': [['Upright rows', 'https://youtu.be/jaAV-rD45I0']],
+  shrug: [['Dumbbell shrugs', 'https://youtu.be/xDt6qbKgLkY']],
+  squat: [
+    ['Barbell squats', 'https://youtu.be/1oed-UmAxFs'],
+    ['Hack squat', 'https://youtu.be/bhfyY8F8F24'],
+  ],
+  'leg-press': [['Leg press', 'https://youtu.be/CHPHn-OnTqE']],
+  'leg-extension': [['Leg extensions', 'https://youtu.be/ljO4jkwv8wQ']],
+  'leg-curl': [['Seated leg curls', 'https://youtu.be/eGoFk_TJT1A']],
+  'lying-leg-curl': [['Lying leg curls', 'https://youtu.be/6y_GEg3YFC0']],
+  sldl: [['Straight leg deadlifts', 'https://youtu.be/1uDiW5--rAE']],
+  lunge: [['Lunges', 'https://youtu.be/T3W55FZJ1hQ']],
+  'seated-calf': [['Seated calf raises', 'https://youtu.be/xz7sqxaJ-Ck']],
+  'standing-calf': [['Standing calf raises', 'https://youtu.be/YMmgqO8Jo-k']],
+  'pull-through': [['Pull through exercise', 'https://youtu.be/FIFAYRU29xk']],
+  'frog-pump': [['Frog pumps', 'https://youtu.be/MQ62r2V7Lw8']],
+  'banded-side-walk': [['Banded side walk', 'https://youtu.be/CPvijTQz6a0']],
+  adductor: [['Adduction and abduction machine', 'https://youtu.be/MwXtApoiVEc']],
+  abductor: [['Adduction and abduction machine', 'https://youtu.be/MwXtApoiVEc']],
+  'hang-clean': [['Hang cleans', 'https://youtu.be/eVWbmwSg5CE']],
+  'barbell-snatch': [['Barbell snatch', 'https://youtu.be/UBc5N_-xdqo']],
+};
+
+// Full workouts (not tied to one exercise), shown at the top of the Exercises tab.
+export const WORKOUT_VIDEOS = [
+  ['Glute and leg workout', 'https://youtu.be/1skBf6h2ksI'],
+  ['Full body HIIT workout', 'https://youtu.be/8J2pCRDTK9o'],
+  ['Home leg workout with bands', 'https://www.youtube.com/watch?v=HG3cwzZ1lyo'],
+  ['Upper body workout with bands', 'https://youtu.be/ou0n5aO_K9Y'],
+  ['Ab workouts', 'https://youtu.be/4-r3Yz7GfdM'],
+];
+
+/** The 11-character video id from a youtu.be or youtube.com link. */
+export function youtubeId(url) {
+  const m = String(url).match(/(?:youtu\.be\/|[?&]v=|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
 export const PLAN = {
   mode: 'cycle',
   length: 8,

@@ -34,6 +34,10 @@ async function openApp(device = PHONE, hash = '#log') {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('dialog', (d) => d.accept());
+  // No internet in tests: stand in for YouTube thumbnails and the player.
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+  await page.route('https://i.ytimg.com/**', (r) => r.fulfill({ status: 200, contentType: 'image/png', body: PNG }));
+  await page.route('https://www.youtube-nocookie.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<p>player</p>' }));
   await page.goto(`${base}/${hash}`);
   await page.waitForSelector('#sync[data-status="synced"]');
   return { context, page, errors };
@@ -306,6 +310,33 @@ describe('workout logbook in the browser', () => {
     await context.close();
   });
 
+  test('exercises tab lists exercises with playable form videos', async () => {
+    const { context, page, errors } = await openApp();
+    // Form video link right on the Log card.
+    await card(page, 'Skull Crusher').getByRole('button', { name: '▶ Form video' }).click();
+    assert.match(await page.locator('.sheet-panel iframe').getAttribute('src'), /youtube-nocookie\.com\/embed\/Hdx3L8vjeeA/);
+    await page.locator('.sheet-panel').getByRole('button', { name: 'Close', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Exercises', exact: true }).click();
+    await page.getByText('Full workouts').waitFor();
+    assert.equal(await page.locator('.video-tile', { hasText: 'Glute and leg workout' }).count(), 1);
+    await page.locator('[data-field="lib-q"]').fill('hang clean');
+    await page.locator('.lib-ex h3', { hasText: 'Hang Clean' }).waitFor();
+    assert.equal(await page.locator('.lib-ex').count(), 1);
+    await page.getByRole('button', { name: 'Play video: Hang cleans' }).click();
+    assert.match(await page.locator('.sheet-panel iframe').getAttribute('src'), /embed\/eVWbmwSg5CE/);
+    assert.equal(await page.getByRole('link', { name: 'Open in YouTube' }).getAttribute('href'), 'https://youtu.be/eVWbmwSg5CE');
+    await page.locator('.sheet-panel').getByRole('button', { name: 'Close', exact: true }).click();
+    // Filter by group and add one to today's log.
+    await page.locator('[data-field="lib-q"]').fill('');
+    await page.getByRole('button', { name: 'Glutes', exact: true }).click();
+    await page.locator('.lib-ex', { hasText: 'Frog Pump' }).getByRole('button', { name: '+ Add to today' }).click();
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
+    await card(page, 'Frog Pump').waitFor();
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
   test('removing an exercise can be undone', async () => {
     const { context, page, errors } = await openApp();
     await card(page, 'Dips').getByRole('button', { name: 'Remove Dips' }).click();
@@ -436,7 +467,7 @@ describe('workout logbook in the browser', () => {
       // Day 3 has the longest name in the rotation picker.
       await page.locator('.weekstrip button').nth(2).click();
       await page.locator('.dayname[value^="Shoulders"]').waitFor();
-      for (const tab of ['Log', 'Plan', 'Progress', 'Settings']) {
+      for (const tab of ['Log', 'Plan', 'Exercises', 'Progress', 'Settings']) {
         await page.getByRole('button', { name: tab, exact: true }).click();
         await page.waitForTimeout(100);
         const wide = await page.evaluate(() => {

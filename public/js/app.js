@@ -1,4 +1,5 @@
 import * as M from './model.js';
+import { VIDEOS, WORKOUT_VIDEOS, youtubeId } from './program.js';
 import { createStore } from './store.js';
 import { lineChart, barChart, hideTip } from './charts.js';
 
@@ -11,12 +12,13 @@ const $sheet = document.getElementById('sheet');
 const $sheetPanel = $sheet.querySelector('.sheet-panel');
 const $rest = document.getElementById('rest');
 
-const TABS = ['log', 'plan', 'progress', 'settings'];
+const TABS = ['log', 'plan', 'exercises', 'progress', 'settings'];
 const ui = {
   tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'log',
   date: M.todayISO(),
   editing: new Set(), // entry ids with the target editor open
   planMore: new Set(), // plan item ids with advanced options open
+  lib: { q: '', group: 'All' },
   progress: { range: '3m', exerciseId: null, picked: false, metric: null, chart: 'volume' },
   sheet: null,
 };
@@ -693,6 +695,7 @@ function entryCard(e, index, session) {
         <div class="target-line"><span>Target <b>${targetText(e.target, e.kind)}</b></span>
           <button type="button" class="link-btn" data-action="toggle-target" data-entry="${e.id}" aria-expanded="${editing}">${editing ? 'Done' : 'Edit target'}</button></div>
         ${cue ? `<div class="cue">${esc(cue)}</div>` : ''}
+        ${VIDEOS[e.exerciseId] ? `<button type="button" class="video-link" data-action="video" data-url="${esc(VIDEOS[e.exerciseId][0][1])}" data-title="${esc(name)}">▶ Form video</button>` : ''}
         ${ssLine ? `<div class="ss-line">${ssLine}</div>` : ''}
       </div>
       ${counterHTML(e)}
@@ -1227,7 +1230,58 @@ function settingsView() {
   </section>`;
 }
 
-const VIEWS = { log: logView, plan: planView, progress: progressView, settings: settingsView };
+// ---------------------------------------------------------------------------
+// Exercises tab: every exercise with its form videos
+// ---------------------------------------------------------------------------
+
+function videoTile([title, url]) {
+  const id = youtubeId(url);
+  if (!id) return '';
+  return `<button type="button" class="video-tile" data-action="video" data-url="${esc(url)}" data-title="${esc(title)}" aria-label="Play video: ${esc(title)}">
+    <span class="video-thumb"><img src="https://i.ytimg.com/vi/${id}/mqdefault.jpg" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="play">${ICON.play}</span></span>
+    <span class="t">${esc(title)}</span></button>`;
+}
+
+function exercisesView() {
+  const state = S();
+  const { q, group } = ui.lib;
+  const all = M.activeExercises(state);
+  const groups = ['All', ...new Set(all.map((e) => e.group || 'Other').sort())];
+  const needle = q.trim().toLowerCase();
+  const list = all.filter((e) => (group === 'All' || (e.group || 'Other') === group) && (!needle || e.name.toLowerCase().includes(needle) || (e.group || '').toLowerCase().includes(needle)));
+  const withVideos = all.filter((e) => VIDEOS[e.id]).length;
+  const items = list
+    .map((e) => {
+      const vids = VIDEOS[e.id] || [];
+      return `<article class="card lib-ex">
+        <div class="lib-ex-head"><h3>${esc(e.name)}</h3><span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${e.group ? `<span class="muted small">${esc(e.group)}</span>` : ''}</div>
+        ${e.cue ? `<div class="cue">${esc(e.cue)}</div>` : ''}
+        ${vids.length ? `<div class="videos">${vids.map(videoTile).join('')}</div>` : '<p class="hint">No video yet.</p>'}
+        <div><button type="button" class="btn sm" data-action="lib-add" data-ex="${esc(e.id)}">+ Add to today</button></div>
+      </article>`;
+    })
+    .join('');
+  const workouts = !needle && group === 'All' ? `<section class="card stack"><h3>Full workouts</h3><div class="videos">${WORKOUT_VIDEOS.map(videoTile).join('')}</div></section>` : '';
+  return `<div class="stack"><h2>Exercises</h2><p class="hint">${all.length} exercises, ${withVideos} with form videos. Tap a video to play it.</p></div>
+    <div class="lib-search"><input type="search" data-field="lib-q" value="${esc(q)}" placeholder="Search exercises" aria-label="Search exercises" autocomplete="off"></div>
+    <div class="seg" role="group" aria-label="Muscle group">${groups.map((g) => `<button type="button" data-action="lib-group" data-group="${esc(g)}" aria-pressed="${g === group}">${esc(g)}</button>`).join('')}</div>
+    ${workouts}
+    ${items || '<p class="hint">No exercises match.</p>'}`;
+}
+
+function openVideo(url, title) {
+  const id = youtubeId(url);
+  if (!id) return;
+  ui.sheet = { mode: 'video' };
+  $sheetPanel.innerHTML = `
+    <div class="spread"><h2 id="sheet-title">${esc(title)}</h2>
+      <button type="button" class="icon-btn" data-action="close-sheet" aria-label="Close">${ICON.close}</button></div>
+    <iframe class="video-frame" src="https://www.youtube-nocookie.com/embed/${id}?playsinline=1&rel=0&modestbranding=1" title="${esc(title)}" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    <a class="btn sm" href="https://youtu.be/${id}" target="_blank" rel="noopener">Open in YouTube</a>`;
+  $sheet.hidden = false;
+}
+
+const VIEWS = { log: logView, plan: planView, exercises: exercisesView, progress: progressView, settings: settingsView };
 
 // ---------------------------------------------------------------------------
 // Exercise picker sheet (add / swap / create)
@@ -1266,7 +1320,7 @@ function closeSheet() {
 
 function renderSheetList() {
   const sh = ui.sheet;
-  if (!sh) return;
+  if (!sh || sh.mode === 'video') return;
   const kinds = document.getElementById('sheet-kinds');
   kinds.innerHTML = [['all', 'All'], ...Object.entries(M.KINDS)].map(([k, v]) => `<button type="button" data-action="sheet-kind" data-kind="${k}" aria-pressed="${sh.kind === k}">${v}</button>`).join('');
   const q = sh.q.trim().toLowerCase();
@@ -1663,6 +1717,20 @@ const ACTIONS = {
   'set-autorest': (el) => updateSettings({ autoRest: el.dataset.value === 'true' }),
   'set-restsound': (el) => updateSettings({ restSound: el.dataset.value === 'true' }),
   'sync-now': () => syncNow(),
+  video: (el) => openVideo(el.dataset.url, el.dataset.title),
+  'lib-group'(el) {
+    ui.lib.group = el.dataset.group;
+    render();
+  },
+  'lib-add'(el) {
+    const exId = el.dataset.ex;
+    const today = M.todayISO();
+    editSession((sess, s) => {
+      const prev = M.previousEntry(s, exId, today);
+      sess.entries.push(M.makeEntry(s, exId, prev?.entry.target, today));
+    }, today);
+    toast(`Added ${M.exerciseName(S(), exId)} to today`);
+  },
   'go-home'() {
     closeSheet();
     ui.tab = 'log';
@@ -1901,6 +1969,23 @@ document.addEventListener('keydown', (ev) => {
     if (first) first.click();
   }
 });
+
+// Exercises tab search filters as you type.
+document.addEventListener('input', (ev) => {
+  if (ev.target.matches?.('[data-field="lib-q"]')) {
+    ui.lib.q = ev.target.value;
+    render();
+  }
+});
+
+// Mark video thumbnails that fail to load (removed or private videos).
+document.addEventListener(
+  'error',
+  (ev) => {
+    if (ev.target.matches?.('.video-thumb img')) ev.target.parentElement.classList.add('is-broken');
+  },
+  true,
+);
 
 document.addEventListener('focusin', (ev) => {
   // Select the whole number so typing replaces it.
