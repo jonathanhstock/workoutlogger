@@ -366,9 +366,10 @@ describe('cardio options and supersets', () => {
     assert.equal(M.supersetNext(sess, fly.id), null);
   });
 
-  test('always US units', () => {
+  test('US units by default; metric is kept when chosen', () => {
+    assert.deepEqual([M.defaultState().settings.unit, M.defaultState().settings.distanceUnit], ['lb', 'mi']);
     const n = M.normalizeState({ settings: { unit: 'kg', distanceUnit: 'km', updatedAt: 5 }, exercises: {}, plan: {} });
-    assert.deepEqual([n.settings.unit, n.settings.distanceUnit], ['lb', 'mi']);
+    assert.deepEqual([n.settings.unit, n.settings.distanceUnit], ['kg', 'km']);
   });
 
   test('saved logbooks pick up program changes for anything not edited', () => {

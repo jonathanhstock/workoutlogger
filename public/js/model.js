@@ -213,9 +213,9 @@ export function normalizeState(input) {
   const out = {
     schemaVersion: SCHEMA_VERSION,
     settings: {
-      // US units only: weights in lb, distance in miles, speed in mph.
-      unit: 'lb',
-      distanceUnit: 'mi',
+      // US units (lb, mi, mph) unless metric was chosen in Settings.
+      unit: st.unit === 'kg' ? 'kg' : 'lb',
+      distanceUnit: st.distanceUnit === 'km' ? 'km' : 'mi',
       weightStep: clampNum(st.weightStep, 0.25, 100) || 5,
       weekStart: Number(st.weekStart) === 0 ? 0 : 1,
       planMode: st.planMode === 'weekly' ? 'weekly' : 'cycle',

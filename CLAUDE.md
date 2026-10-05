@@ -35,8 +35,9 @@ server-side storage, migrate to Postgres instead:
 
 ## Conventions
 
-- **US units only:** weights in lb, distance in miles, speed in mph. There is
-  no metric option; don't add kg/km. (`normalizeState` forces `lb`/`mi`.)
+- **US units by default** (lb, miles, mph); metric (kg, km, km/h) stays
+  available in Settings. New measurements must follow the chosen unit setting
+  (`settings.unit` / `settings.distanceUnit`) and default to US units.
 - Program defaults live in `public/js/program.js`. Plan days and exercises the
   user hasn't edited (`updatedAt` 0) always follow the program, so changes
   there reach existing logbooks; anything the user edited is kept.

@@ -79,13 +79,20 @@ function fmtDate(iso, opts = { weekday: 'short', month: 'short', day: 'numeric' 
   return M.parseISODate(iso).toLocaleDateString(undefined, opts);
 }
 
-const CARDIO_LABEL = { speed: 'Speed (mph)', incline: 'Incline', level: 'Level' };
+const speedUnit = () => (dunit() === 'km' ? 'km/h' : 'mph');
+const CARDIO_LABEL = {
+  get speed() {
+    return `Speed (${speedUnit()})`;
+  },
+  incline: 'Incline',
+  level: 'Level',
+};
 
 const range = (lo, hi) => (hi && hi > lo ? `${fmt(lo)}–${fmt(hi)}` : fmt(lo));
 
 /** Cardio settings as text, e.g. "incline 12 · 3 mph" or "level 8". */
 function cardioSettingsText(c) {
-  return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} mph` : '', c.level ? `level ${fmt(c.level)}` : ''].filter(Boolean).join(' · ');
+  return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} ${speedUnit()}` : '', c.level ? `level ${fmt(c.level)}` : ''].filter(Boolean).join(' · ');
 }
 
 function targetText(t, kind) {
@@ -723,7 +730,7 @@ function targetEditor(e, prev) {
   let fields;
   if (e.kind === 'cardio') {
     const extra = M.cardioFields(S(), e.exerciseId).map((f) => st(f, CARDIO_LABEL[f])).join('');
-    fields = `<div class="grid3">${st('minutes', 'Minutes')}${extra}${st('distance', 'Distance (mi)')}</div>`;
+    fields = `<div class="grid3">${st('minutes', 'Minutes')}${extra}${st('distance', `Distance (${dunit()})`)}</div>`;
   } else if (M.isHold(e.kind)) {
     fields =
       e.kind === 'vacuum'
@@ -840,7 +847,7 @@ function cardioBody(e) {
   return `<div class="cardio-grid">
       ${stepper({ scope: 'cardio', key: 'minutes', value: c.minutes, label: 'Minutes', entry: e.id })}
       ${settings}
-      ${stepper({ scope: 'cardio', key: 'distance', value: c.distance || '', label: est ? `Distance (≈${fmt(est)} mi)` : 'Distance (mi)', placeholder: est ? fmt(est) : '0', entry: e.id })}
+      ${stepper({ scope: 'cardio', key: 'distance', value: c.distance || '', label: est ? `Distance (≈${fmt(est)} ${dunit()})` : `Distance (${dunit()})`, placeholder: est ? fmt(est) : '0', entry: e.id })}
       ${field('calories', 'Calories')}
       ${field('avgHr', 'Avg heart rate')}
     </div>
@@ -984,7 +991,7 @@ function metricFormatter(kind, key) {
   if (['e1rm', 'topWeight', 'volume'].includes(key)) return (v, axis) => (axis ? fmtCompact(v) : `${fmt(v)} ${unit()}`);
   if (key === 'distance') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} ${dunit()}`);
   if (key === 'minutes') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} min`);
-  if (key === 'speed') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} mph`);
+  if (key === 'speed') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} ${speedUnit()}`);
   if (key === 'incline') return (v, axis) => (axis ? fmt(v) : `incline ${fmt(v)}`);
   if (key === 'level') return (v, axis) => (axis ? fmt(v) : `level ${fmt(v)}`);
   return (v) => fmt(v);
@@ -1184,9 +1191,11 @@ function settingsView() {
 
   <section class="card">
     <h3>Units</h3>
+    <div class="settings-row"><span>Weight unit</span>${seg('set-unit', st.unit, [['lb', 'lb'], ['kg', 'kg']])}</div>
+    <div class="settings-row"><span>Distance &amp; speed</span>${seg('set-dunit', st.distanceUnit, [['mi', 'mi · mph'], ['km', 'km · km/h']])}</div>
     <div class="settings-row"><span>Weight +/− step</span>${stepper({ scope: 'setting', key: 'weightStep', value: st.weightStep })}</div>
     <div class="settings-row"><span>Week starts on</span>${seg('set-weekstart', st.weekStart, [[1, 'Monday'], [0, 'Sunday']])}</div>
-    <p class="hint">Everything is in US units: pounds (lb), miles (mi) and miles per hour (mph).</p>
+    <p class="hint">US units (lb, mi, mph) are the default. Switching units relabels numbers; it doesn't convert past entries.</p>
   </section>
 
   <section class="card stack">
@@ -1648,6 +1657,8 @@ const ACTIONS = {
     ui.progress.chart = el.dataset.chart;
     render();
   },
+  'set-unit': (el) => updateSettings({ unit: el.dataset.value }),
+  'set-dunit': (el) => updateSettings({ distanceUnit: el.dataset.value }),
   'set-weekstart': (el) => updateSettings({ weekStart: Number(el.dataset.value) }),
   'set-autorest': (el) => updateSettings({ autoRest: el.dataset.value === 'true' }),
   'set-restsound': (el) => updateSettings({ restSound: el.dataset.value === 'true' }),

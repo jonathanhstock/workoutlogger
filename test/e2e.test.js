@@ -292,6 +292,15 @@ describe('workout logbook in the browser', () => {
     assert.equal(await stairs.getByRole('textbox', { name: 'Level', exact: true }).inputValue(), '8');
     assert.equal(await stairs.getByRole('textbox', { name: 'Speed (mph)', exact: true }).count(), 0);
     await stairs.getByRole('button', { name: 'Increase Level' }).click();
+    // Metric is available in Settings; US units are the default.
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'lb', exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'mi · mph' }).getAttribute('aria-pressed'), 'true');
+    await page.getByRole('button', { name: 'km · km/h' }).click();
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
+    await card(page, 'Seated Bike').getByText('Distance (km)').first().waitFor();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'mi · mph' }).click();
     await serverHas(page, (s) => todayEntry(s, 'stairmaster')?.cardio.level === 9 && todayEntry(s, 'incline-db-press').sets.some((x) => x.done));
     assert.deepEqual(errors, []);
     await context.close();
