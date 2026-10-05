@@ -15,6 +15,12 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="css/app.css">
+  <!-- Fetch every module at once instead of discovering imports one level at a time. -->
+  <link rel="modulepreload" href="js/app.js">
+  <link rel="modulepreload" href="js/model.js">
+  <link rel="modulepreload" href="js/program.js">
+  <link rel="modulepreload" href="js/store.js">
+  <link rel="modulepreload" href="js/charts.js">
 </head>
 <body>
   <header class="topbar">

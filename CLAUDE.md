@@ -31,7 +31,7 @@ Notes for that migration:
 - Photos go in object storage (Cloudflare R2, S3, Cloudinary), not on the server.
 - On first start, import the existing `logbook.json` so no data is lost, then
   drop the Render disk from `render.yaml`.
-- The browser's offline copy in localStorage stays as it is; it's a client
+- The browser's offline copy (IndexedDB) stays as it is; it's a client
   cache, not server state.
 
 ## Conventions
@@ -54,6 +54,12 @@ Notes for that migration:
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
   timer between linked exercises; rest after the last one in the group.
   Stomach vacuums and cardio never use the rest timer.
+- Speed: the server gzips/brotlis app files once and answers revalidation with
+  ETag 304s; syncs are gzipped both ways and get an empty 204 when nothing is
+  newer. The browser keeps one IndexedDB row per record (`store.js`), so a tap
+  saves only that day. Model helpers that run during render must not scan or
+  sort the whole history per item (see `datesInRange`); check with a few years
+  of fake data when adding charts or lists.
 - `public/js/model.js` holds all data logic and is shared by the browser, the
   server and the tests. Keep it free of DOM, storage and network code.
 - Never make a page element wider than the screen (iPhone zooms out and gets stuck).

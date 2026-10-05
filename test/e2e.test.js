@@ -467,6 +467,56 @@ describe('workout logbook in the browser', () => {
     await context.close();
   });
 
+  test('on a static host without the server it keeps data on the device', async () => {
+    const context = await browser.newContext(PHONE);
+    const page = await context.newPage();
+    await page.route('**/api/**', (r) => r.fulfill({ status: 404, contentType: 'text/html', body: '<h1>Not found</h1>' }));
+    await page.goto(`${base}/#log`);
+    await page.waitForSelector('#sync[data-status="local"]');
+    await page.locator('article.entry').first().waitFor();
+    await context.close();
+  });
+
+  test('an interval timer that finished while the app was closed is still logged', async () => {
+    const { context, page, errors } = await openApp();
+    const entryId = await page.evaluate((today) => {
+      const { store, M } = window.logbook;
+      const e = store.state.sessions[today].entries.find((x) => x.kind === 'cardio' && !x.cardio.done);
+      const cfg = { warmMin: 0, workSec: 30, easySec: 30, rounds: 3, coolMin: 0 };
+      const startedAt = Date.now() - 3600000;
+      localStorage.setItem('workout-logbook:hiit', JSON.stringify({ entryId: e.id, date: today, name: 'HIIT', cfg, phases: M.hiitPhases(cfg), startedAt, pausedAt: 0, pausedMs: 0, lastIndex: 2, lastBeep: -1 }));
+      return e.id;
+    }, TODAY);
+    await page.reload();
+    await page.locator('#toast', { hasText: 'HIIT logged: 3 intervals' }).waitFor();
+    const s = await serverHas(page, (st) => st.sessions[TODAY].entries.find((x) => x.id === entryId)?.cardio.done);
+    assert.equal(s.sessions[TODAY].entries.find((x) => x.id === entryId).cardio.rounds, 3);
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  test('moves an older logbook from localStorage into IndexedDB', async () => {
+    const context = await browser.newContext(PHONE);
+    const page = await context.newPage();
+    const old = defaultState(1);
+    old.body['2026-09-01'] = { weight: 190.5, updatedAt: 5 };
+    await page.addInitScript((data) => {
+      if (!sessionStorage.getItem('seeded')) {
+        localStorage.setItem('workout-logbook:v1', data);
+        sessionStorage.setItem('seeded', '1');
+      }
+    }, JSON.stringify(old));
+    await page.route('**/api/**', (r) => r.fulfill({ status: 404, contentType: 'text/html', body: 'nope' }));
+    await page.goto(`${base}/#log`);
+    await page.waitForSelector('#sync[data-status="local"]');
+    assert.equal(await page.evaluate(() => window.logbook.store.state.body['2026-09-01']?.weight), 190.5);
+    assert.equal(await page.evaluate(() => localStorage.getItem('workout-logbook:v1')), null);
+    await page.reload();
+    await page.waitForSelector('#sync[data-status="local"]');
+    assert.equal(await page.evaluate(() => window.logbook.store.state.body['2026-09-01']?.weight), 190.5);
+    await context.close();
+  });
+
   test('pull down to sync, and the logo goes to today', async () => {
     const { context, page, errors } = await openApp();
     // A short pull does nothing; a long one syncs.

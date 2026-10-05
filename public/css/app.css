@@ -572,8 +572,6 @@ body.has-rest { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-botto
 .settings-row:last-child { border-bottom: 0; }
 .settings-row .stepper { width: 150px; }
 .settings-row select { flex: 0 1 auto; min-width: 0; }
-.ex-row { display: grid; grid-template-columns: minmax(0, 1fr) 128px 36px; gap: 6px; align-items: center; padding: 6px 0; }
-.ex-row input, .ex-row select { min-height: 38px; padding: 6px 10px; font-size: 14px; }
 
 /* ---------- Sheet (modal) ---------- */
 .sheet { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; justify-content: center; }

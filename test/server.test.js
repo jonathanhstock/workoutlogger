@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import zlib from 'node:zlib';
 import { createServer } from '../server.js';
 import { defaultState } from '../public/js/model.js';
 
@@ -32,6 +33,37 @@ describe('server without password', () => {
     assert.match(await res.text(), /Workout Logbook/);
     const js = await fetch(`${ctx.base}/js/model.js`);
     assert.match(js.headers.get('content-type'), /javascript/);
+  });
+
+  test('compresses app files and answers revalidation with 304', async () => {
+    // Node's fetch decodes gzip/br itself; check headers and decoded body.
+    const res = await fetch(`${ctx.base}/js/app.js`, { headers: { 'accept-encoding': 'br, gzip' } });
+    assert.equal(res.headers.get('content-encoding'), 'br');
+    assert.match(res.headers.get('vary'), /Accept-Encoding/);
+    const etag = res.headers.get('etag');
+    assert.ok(etag);
+    assert.match(await res.text(), /import \* as M/);
+    const gz = await fetch(`${ctx.base}/css/app.css`, { headers: { 'accept-encoding': 'gzip' } });
+    assert.equal(gz.headers.get('content-encoding'), 'gzip');
+    const again = await fetch(`${ctx.base}/js/app.js`, { headers: { 'if-none-match': etag } });
+    assert.equal(again.status, 304);
+    const missing = await fetch(`${ctx.base}/nope.js`);
+    assert.equal(missing.status, 404);
+  });
+
+  test('accepts gzipped sync bodies and gzips the reply', async () => {
+    const mine = defaultState(1);
+    mine.sessions['2026-11-01'] = { date: '2026-11-01', name: 'Gz', dayType: 'training', notes: '', entries: [], updatedAt: 100 };
+    const res = await fetch(`${ctx.base}/api/state`, {
+      method: 'PUT',
+      headers: { 'content-encoding': 'gzip', 'accept-encoding': 'gzip' },
+      body: zlib.gzipSync(JSON.stringify(mine)),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-encoding'), 'gzip');
+    assert.ok((await res.json()).sessions['2026-11-01']);
+    const bad = await fetch(`${ctx.base}/api/state`, { method: 'PUT', headers: { 'content-encoding': 'gzip' }, body: 'not gzip' });
+    assert.equal(bad.status, 400);
   });
 
   test('health reports no auth', async () => {
@@ -145,5 +177,54 @@ describe('corrupt data file', () => {
     console.error = orig;
     ctx.server.close();
     assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('logbook.json.corrupt-')));
+  });
+});
+
+describe('saving', () => {
+  const put = (base, body, headers = {}) => fetch(`${base}/api/state`, { method: 'PUT', headers, body: JSON.stringify(body) });
+  const withSessionOn = (date, t) => {
+    const s = defaultState(1);
+    s.sessions[date] = { date, name: 'X', dayType: 'training', notes: '', entries: [], updatedAt: t };
+    return s;
+  };
+
+  test('a failed write does not block later saves', async () => {
+    const dir = tmpDir();
+    const ctx = await start({ dataDir: dir });
+    const orig = console.error;
+    console.error = () => {};
+    try {
+      // Backups failing (backups/ is now a file) must not fail the sync.
+      fs.rmSync(path.join(dir, 'backups'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'backups'), '');
+      assert.equal((await put(ctx.base, withSessionOn('2026-10-01', 10))).status, 200);
+      // The main file can't be written (a folder is in the way): 500...
+      const db = path.join(dir, 'logbook.json');
+      fs.rmSync(db);
+      fs.mkdirSync(db);
+      fs.writeFileSync(path.join(db, 'x'), '');
+      assert.equal((await put(ctx.base, withSessionOn('2026-10-02', 20))).status, 500);
+      // ...and once it's fixed, the next sync saves everything, even with no new changes.
+      fs.rmSync(db, { recursive: true });
+      assert.equal((await put(ctx.base, withSessionOn('2026-10-02', 20))).status, 200);
+      const onDisk = JSON.parse(fs.readFileSync(db, 'utf8'));
+      assert.ok(onDisk.sessions['2026-10-01'] && onDisk.sessions['2026-10-02']);
+    } finally {
+      console.error = orig;
+      ctx.server.close();
+    }
+  });
+
+  test('answers 204 when the app already has everything', async () => {
+    const ctx = await start({ dataDir: tmpDir() });
+    const mine = withSessionOn('2026-10-03', 30);
+    const first = await put(ctx.base, mine, { 'x-sync-unchanged': 'empty' });
+    assert.equal(first.status, 204);
+    // Something newer on the server: the full merged copy comes back.
+    await put(ctx.base, withSessionOn('2026-10-04', 40));
+    const second = await put(ctx.base, mine, { 'x-sync-unchanged': 'empty' });
+    assert.equal(second.status, 200);
+    assert.ok((await second.json()).sessions['2026-10-04']);
+    ctx.server.close();
   });
 });

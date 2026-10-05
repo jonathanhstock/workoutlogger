@@ -595,3 +595,75 @@ describe('HIIT interval timer', () => {
     assert.equal(M.hiitConfig(e).rounds, 8);
   });
 });
+
+describe('bug fixes and speed-ups', () => {
+  test('statesEqual ignores key order', () => {
+    assert.ok(M.statesEqual({ a: 1, b: { c: [1, 2] } }, { b: { c: [1, 2] }, a: 1 }));
+    assert.ok(!M.statesEqual({ a: 1 }, { a: 1, b: undefined }));
+    assert.ok(!M.statesEqual([1, 2], { 0: 1, 1: 2 }));
+    // A merge with itself never looks like a change.
+    const s = fresh();
+    withSession(s, D1, [strength('row', [[95, 12, true, 'warmup'], [185, 8]])]);
+    assert.ok(M.statesEqual(M.mergeStates(s, s), M.normalizeState(s)));
+  });
+
+  test('erase all data still follows program updates and wins over other devices', () => {
+    const s = fresh();
+    s.plan[0] = { ...s.plan[0], name: 'My push day', updatedAt: 500 };
+    withSession(s, D1, [strength('row', [[100, 10]])]);
+    M.setBodyWeight(s, D1, 180);
+    M.eraseAll(s, 1000);
+    const n = M.normalizeState(JSON.parse(JSON.stringify(s)));
+    assert.equal(n.sessions[D1].deleted, true);
+    assert.equal(M.bodyWeightOn(n, D1), 0);
+    // The plan day is the program's again, stamped so it beats older edits...
+    assert.notEqual(n.plan[0].name, 'My push day');
+    assert.equal(n.plan[0].updatedAt, 1000);
+    const other = fresh();
+    other.plan[0] = { ...other.plan[0], name: 'My push day', updatedAt: 500 };
+    assert.notEqual(M.mergeStates(n, other).plan[0].name, 'My push day');
+    // ...yet still counts as unedited, so program.js changes reach it.
+    n.plan[0].items = [];
+    assert.ok(M.normalizeState(n).plan[0].items.length > 0);
+    // Editing it afterwards makes it the user's own.
+    n.plan[0].name = 'Mine now';
+    n.plan[0].updatedAt = 2000;
+    assert.equal(M.normalizeState(n).plan[0].name, 'Mine now');
+  });
+
+  test('record ids are kept to safe characters', () => {
+    const s = fresh();
+    withSession(s, D1, [{ ...strength('row', [[100, 10]]), id: '"><img src=x onerror=alert(1)>' }]);
+    const id = M.normalizeState(s).sessions[D1].entries[0].id;
+    assert.match(id, /^[\w-]+$/);
+  });
+
+  test('CSV export defuses formulas and has a unit column', () => {
+    const s = fresh();
+    s.exercises.row.name = '=HYPERLINK("x")';
+    withSession(s, D1, [strength('row', [[185, 8]])]);
+    const lines = M.toCSV(s).trim().split('\n');
+    assert.ok(lines[0].endsWith(',unit'));
+    assert.ok(lines[1].includes(`"'=HYPERLINK(""x"")"`));
+    assert.equal(lines[0].split(',').length, lines[1].replace(/"[^"]*"/g, 'q').split(',').length);
+    assert.ok(lines[1].endsWith(',lb'));
+  });
+
+  test('range totals and weigh-ins are the same for short and long ranges', () => {
+    const s = fresh();
+    for (let i = 0; i < 60; i++) {
+      const d = M.addDays(D1, -i);
+      withSession(s, d, [strength('row', [[100 + i, 10]])]);
+      if (i % 2) M.setBodyWeight(s, d, 200 - i);
+    }
+    s.sessions[M.addDays(D1, -3)] = { date: M.addDays(D1, -3), deleted: true, updatedAt: 5 };
+    const week = M.rangeSummary(s, M.addDays(D1, -6), D1);
+    assert.equal(week.workouts, 6);
+    const all = M.rangeSummary(s, '2000-01-01', '2100-01-01');
+    assert.equal(all.workouts, 59);
+    assert.equal(M.weeklySummaries(s, M.addDays(D1, -59), D1).reduce((a, w) => a + w.workouts, 0), 59);
+    assert.deepEqual(M.previousBodyWeight(s, D1), { date: M.addDays(D1, -1), weight: 199 });
+    assert.equal(M.bodyWeightAverage(s, D1, 7), M.round((199 + 197 + 195) / 3, 1));
+    assert.equal(M.bodyWeights(s, M.addDays(D1, -6), D1).length, 3);
+  });
+});

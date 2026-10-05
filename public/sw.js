@@ -2,7 +2,7 @@
 // immediately when online; falls back to the cached copy when offline.
 // API calls are never cached (the app keeps its own local copy of data).
 
-const CACHE = 'logbook-v2';
+const CACHE = 'logbook-v3';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/model.js', 'js/program.js', 'js/store.js', 'js/charts.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -31,6 +31,6 @@ self.addEventListener('fetch', (event) => {
         }
         return res;
       })
-      .catch(() => caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match('index.html'))),
+      .catch(() => caches.match(req, { ignoreSearch: true }).then((hit) => hit || (req.mode === 'navigate' ? caches.match('index.html') : Response.error()))),
   );
 });
