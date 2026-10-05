@@ -5,9 +5,16 @@
 // [id, name, kind, group]
 export const EXERCISES = [
   // Cardio
-  ['incline-walk', 'Incline Treadmill Walk', 'cardio', 'Cardio'],
-  ['bike', 'Stationary Bike', 'cardio', 'Cardio'],
-  ['treadmill', 'Treadmill', 'cardio', 'Cardio'],
+  // Cardio: `fields` picks which settings you log (speed in mph, incline %,
+  // intensity level); `target` is the default; `cue` is shown on the card.
+  ['incline-walk', 'Incline Treadmill Walk', 'cardio', 'Cardio', { fields: ['speed', 'incline'], target: { minutes: 30, speed: 3, incline: 12 }, cue: 'Incline 12 · 3.0 mph · 30–45 min' }],
+  ['incline-walk-full', 'Full Incline Walk', 'cardio', 'Cardio', { fields: ['speed', 'incline'], target: { minutes: 30, speed: 2.8, incline: 15 }, cue: 'Incline 15 · 2.7–3.0 mph · don’t hold on' }],
+  ['incline-walk-fast', 'Incline Walk (3.5 mph)', 'cardio', 'Cardio', { fields: ['speed', 'incline'], target: { minutes: 30, speed: 3.5, incline: 10 }, cue: 'Incline 9–12 · 3.5 mph · hold on if needed' }],
+  ['bike', 'Seated Bike', 'cardio', 'Cardio', { fields: ['level'], target: { minutes: 30, level: 8 }, cue: 'Intensity 6–10' }],
+  ['elliptical', 'Elliptical', 'cardio', 'Cardio', { fields: ['level'], target: { minutes: 30, level: 8 }, cue: 'High intensity: resistance 7–10, hands moving' }],
+  ['stairmaster', 'Stairmaster', 'cardio', 'Cardio', { fields: ['level'], target: { minutes: 30, level: 8 }, cue: 'Decent speed (7–10), don’t hold on' }],
+  ['outdoor-walk', 'Outdoor Walk', 'cardio', 'Cardio', { fields: [], target: { minutes: 30 }, cue: 'Medium-fast pace' }],
+  ['treadmill', 'Treadmill', 'cardio', 'Cardio', { fields: ['speed', 'incline'], target: { minutes: 30, speed: 3, incline: 1 } }],
 
   // Stomach vacuum
   ['vacuum', 'Stomach Vacuum', 'vacuum', 'Core'],
@@ -97,8 +104,9 @@ const s = (exerciseId, sets, reps, x = {}) => ({
   ...(x.rest ? { restSec: x.rest } : {}),
   ...(x.note ? { note: x.note } : {}),
   ...(x.opt ? { optional: true } : {}),
+  ...(x.ss ? { supersetNext: true } : {}),
 });
-const cardio = (exerciseId, minutes, note, x = {}) => ({ exerciseId, minutes, distance: 0, note, ...x });
+const cardio = (exerciseId, minutes, note, x = {}) => ({ exerciseId, minutes, distance: 0, ...(note ? { note } : {}), ...x });
 const hold = (exerciseId, sets, holdSec, x = {}) => ({
   exerciseId,
   sets,
@@ -110,7 +118,8 @@ const hold = (exerciseId, sets, holdSec, x = {}) => ({
 });
 
 const warmupBike = cardio('bike', 5, 'Warm-up: 5–10 min on the bike or treadmill');
-const fastedCardio = cardio('incline-walk', 30, 'Fasted · 3 mph · incline 12 · 30–45 min');
+// Default cardio; swap it for any other cardio option on the day.
+const fastedCardio = cardio('incline-walk', 30, 'Fasted', { speed: 3, incline: 12 });
 const vacuums = hold('vacuum', 5, 10, { setsMax: 8, note: 'Daily: 5–8 holds of 10 seconds' });
 const coreCircuit = [
   s('hanging-leg-raise', 3, 15, { setsMax: 4, repsMax: 20, rest: 30, note: 'Core circuit: pick 3–4 exercises, swap any you like' }),
@@ -141,13 +150,13 @@ export const PLAN = {
         s('push-up', 3, 20, { note: 'Warm-up: as many as you can, up to 20' }),
         s('pull-up', 1, 10, { note: 'Warm-up set' }),
         s('incline-machine-press', 3, 8, { setsMax: 4, repsMax: 10, drop: 1, note: 'Or any similar incline machine' }),
-        s('incline-db-press', 3, 8, { setsMax: 4, repsMax: 10, note: 'Optional superset with incline DB flyes' }),
-        s('incline-db-fly', 3, 10, { setsMax: 4, repsMax: 12, opt: true, note: 'Superset with incline DB press' }),
+        s('incline-db-press', 3, 8, { setsMax: 4, repsMax: 10, ss: true }),
+        s('incline-db-fly', 3, 10, { setsMax: 4, repsMax: 12, opt: true }),
         s('flat-press', 4, 10, { repsMax: 12, note: 'Decline Hammer Strength, flat machine or flat DB bench' }),
         s('cable-crossover', 3, 12, { setsMax: 5, repsMax: 15, note: 'Middle-chest level' }),
         s('dips', 3, 15, { repsMax: 20, note: 'Regular, assisted forward-lean wide grip, or machine' }),
         s('triceps-pushdown', 3, 12, { repsMax: 15, warm: 1, warmReps: 15, note: 'Straight bar or rope' }),
-        s('skull-crusher', 4, 15, { scheme: [15, 12, 10, 10], note: 'EZ/DB, or single-arm DB extensions. Superset with close-grip EZ bench' }),
+        s('skull-crusher', 4, 15, { scheme: [15, 12, 10, 10], ss: true, note: 'EZ/DB, or single-arm DB extensions' }),
         s('close-grip-bench', 4, 15, { scheme: [15, 12, 10, 10], opt: true }),
         vacuums,
       ],

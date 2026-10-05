@@ -79,10 +79,27 @@ function fmtDate(iso, opts = { weekday: 'short', month: 'short', day: 'numeric' 
   return M.parseISODate(iso).toLocaleDateString(undefined, opts);
 }
 
+const speedUnit = () => (dunit() === 'km' ? 'km/h' : 'mph');
+const CARDIO_LABEL = {
+  get speed() {
+    return `Speed (${speedUnit()})`;
+  },
+  incline: 'Incline',
+  level: 'Level',
+};
+
 const range = (lo, hi) => (hi && hi > lo ? `${fmt(lo)}–${fmt(hi)}` : fmt(lo));
 
+/** Cardio settings as text, e.g. "incline 12 · 3 mph" or "level 8". */
+function cardioSettingsText(c) {
+  return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} ${speedUnit()}` : '', c.level ? `level ${fmt(c.level)}` : ''].filter(Boolean).join(' · ');
+}
+
 function targetText(t, kind) {
-  if (kind === 'cardio') return `${fmt(t.minutes)} min${t.distance ? ` · ${fmt(t.distance)} ${dunit()}` : ''}`;
+  if (kind === 'cardio') {
+    const bits = [`${fmt(t.minutes)} min`, cardioSettingsText(t), t.distance ? `${fmt(t.distance)} ${dunit()}` : ''];
+    return bits.filter(Boolean).join(' · ');
+  }
   if (M.isHold(kind)) return `${range(t.sets, t.setsMax)} × ${fmtSec(t.holdSec)} hold`;
   const reps = t.repScheme ? t.repScheme.join('/') : range(t.reps, t.repsMax);
   const sets = t.repScheme ? '' : `${range(t.sets, t.setsMax)} × `;
@@ -128,6 +145,7 @@ const ICON = {
   play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>',
   stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z" fill="currentColor"/></svg>',
   swap: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3 1.4-1.4L22 8l-5.6 5.4L15 12l3-3H7zm10 10H6l3 3-1.4 1.4L2 16l5.6-5.4L9 12l-3 3h11z" fill="currentColor"/></svg>',
+  link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.9 12a3.1 3.1 0 0 1 3.1-3.1h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12zM8 13h8v-2H8zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10z" fill="currentColor"/></svg>',
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z" fill="currentColor"/></svg>',
   scale: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm7 3a6 6 0 0 0-5.7 4h3.2l2.3-2.3 1.4 1.4-.9.9h5.4A6 6 0 0 0 12 6z" fill="currentColor"/></svg>',
 };
@@ -149,11 +167,14 @@ const STEP = {
   holdSec: () => 5,
   minutes: () => 1,
   distance: () => 0.1,
+  speed: () => 0.1,
+  incline: () => 0.5,
+  level: () => 1,
   calories: () => 10,
   avgHr: () => 1,
 };
-const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength']);
-const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260 };
+const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level']);
+const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260, speed: 30, incline: 40, level: 30 };
 
 function cleanValue(key, v) {
   v = Math.max(0, Math.min(MAX[key] ?? 100000, Number(v) || 0));
@@ -484,9 +505,20 @@ function updateRestBar() {
   if (left < -10) stopRest();
 }
 
-/** Start the rest timer after finishing a set, if enabled. */
-function restAfter(entry) {
+/**
+ * After finishing a set: in a superset, go straight to the next exercise
+ * (no rest); otherwise start the rest timer, if enabled.
+ */
+function restAfter(entry, date = ui.date) {
   const st = S().settings;
+  const session = M.getSession(S(), date);
+  const next = M.supersetNext(session, entry.id);
+  if (next) {
+    stopRest();
+    toast(`Superset: straight to ${M.exerciseName(S(), next.exerciseId)}`);
+    requestAnimationFrame(() => document.querySelector(`[data-entry-id="${next.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    return;
+  }
   // Cardio and stomach vacuums don't use rest periods.
   if (!st.autoRest || entry.kind === 'cardio' || entry.kind === 'vacuum') return;
   const sec = entry.target.restSec || st.restSec;
@@ -560,7 +592,12 @@ function logView() {
   const sumBits = [sum.vol ? `${fmt(sum.vol)} ${unit()}` : '', sum.min ? `${fmt(sum.min)} min cardio` : '', sum.hold ? `${fmtSec(sum.hold)} vacuum` : ''].filter(Boolean).join(' · ');
   const pct = totalUnits ? Math.round((doneUnits / totalUnits) * 100) : 0;
 
-  const entries = session.entries.map((e, i) => entryCard(e, i, session.entries.length)).join('');
+  const entries = session.entries
+    .map((e, i) => {
+      const linked = e.target.supersetNext && session.entries[i + 1];
+      return entryCard(e, i, session) + (linked ? '<div class="ss-link" aria-hidden="true"><span>Superset · no rest between</span></div>' : '');
+    })
+    .join('');
   const isRest = session.dayType !== 'training';
   const emptyState = !session.entries.length
     ? `<div class="card empty"><h3>${session.dayType === 'rest' ? 'Rest day' : session.dayType === 'active' ? 'Active rest day' : 'Nothing planned'}</h3>
@@ -635,7 +672,10 @@ function counterHTML(e) {
   </div>`;
 }
 
-function entryCard(e, index, count) {
+function entryCard(e, index, session) {
+  const count = session.entries.length;
+  const ssNext = M.supersetNext(session, e.id);
+  const ssPrev = M.supersetPrev(session, e.id);
   const state = S();
   const ex = state.exercises[e.exerciseId];
   const name = ex?.name || 'Unknown exercise';
@@ -644,13 +684,16 @@ function entryCard(e, index, count) {
   const allDone = M.entryComplete(e);
   const body = e.kind === 'cardio' ? cardioBody(e) : setsBody(e, prev);
 
-  return `<article class="card entry${allDone ? ' is-done' : ''}${e.target.optional ? ' is-optional' : ''}" data-entry-id="${e.id}">
+  const cue = [ex?.cue, e.target.note].filter(Boolean).join(' · ');
+  const ssLine = ssNext ? `Superset with ${esc(M.exerciseName(state, ssNext.exerciseId))}: go straight to it, then rest` : ssPrev ? `Superset with ${esc(M.exerciseName(state, ssPrev.exerciseId))}: rest after this one` : '';
+  return `<article class="card entry${allDone ? ' is-done' : ''}${e.target.optional ? ' is-optional' : ''}${ssNext || ssPrev ? ' is-superset' : ''}" data-entry-id="${e.id}">
     <div class="entry-head">
       <div class="entry-title">
-        <h3>${esc(name)} <span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${e.target.optional ? '<span class="badge opt" title="Optional – skip it if you like">Optional</span>' : ''}</h3>
+        <h3>${esc(name)} <span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${ssNext || ssPrev ? '<span class="badge ss">Superset</span>' : ''}${e.target.optional ? '<span class="badge opt" title="Optional – skip it if you like">Optional</span>' : ''}</h3>
         <div class="target-line"><span>Target <b>${targetText(e.target, e.kind)}</b></span>
           <button type="button" class="link-btn" data-action="toggle-target" data-entry="${e.id}" aria-expanded="${editing}">${editing ? 'Done' : 'Edit target'}</button></div>
-        ${e.target.note ? `<div class="cue">${esc(e.target.note)}</div>` : ''}
+        ${cue ? `<div class="cue">${esc(cue)}</div>` : ''}
+        ${ssLine ? `<div class="ss-line">${ssLine}</div>` : ''}
       </div>
       ${counterHTML(e)}
     </div>
@@ -663,6 +706,7 @@ function entryCard(e, index, count) {
       <button type="button" class="btn sm" data-action="add-set" data-entry="${e.id}">+ Set</button>` : ''}
       <span class="grow"></span>
       <button type="button" class="icon-btn" data-action="swap-entry" data-entry="${e.id}" aria-label="Swap ${esc(name)} for another exercise" title="Swap exercise">${ICON.swap}</button>
+      <button type="button" class="icon-btn" data-action="superset-entry" data-entry="${e.id}" aria-pressed="${!!e.target.supersetNext}" aria-label="Superset ${esc(name)} with the next exercise" title="Superset with next exercise" ${index === count - 1 ? 'disabled' : ''}>${ICON.link}</button>
       <button type="button" class="icon-btn" data-action="move-entry" data-entry="${e.id}" data-dir="-1" aria-label="Move up" ${index === 0 ? 'disabled' : ''}>${ICON.up}</button>
       <button type="button" class="icon-btn" data-action="move-entry" data-entry="${e.id}" data-dir="1" aria-label="Move down" ${index === count - 1 ? 'disabled' : ''}>${ICON.down}</button>
       <button type="button" class="icon-btn" data-action="remove-entry" data-entry="${e.id}" aria-label="Remove ${esc(name)}">${ICON.trash}</button>
@@ -685,7 +729,8 @@ function targetEditor(e, prev) {
   const st = (key, label) => stepper({ scope: 'target', key, value: t[key] || 0, label, entry: e.id });
   let fields;
   if (e.kind === 'cardio') {
-    fields = `<div class="grid2">${st('minutes', 'Minutes')}${st('distance', `Distance (${dunit()})`)}</div>`;
+    const extra = M.cardioFields(S(), e.exerciseId).map((f) => st(f, CARDIO_LABEL[f])).join('');
+    fields = `<div class="grid3">${st('minutes', 'Minutes')}${extra}${st('distance', `Distance (${dunit()})`)}</div>`;
   } else if (M.isHold(e.kind)) {
     fields =
       e.kind === 'vacuum'
@@ -730,7 +775,10 @@ function intensityHTML(e, prev) {
     foot = `<span>Est. 1RM ${pm?.e1rm ? `${fmt(pm.e1rm)} → ` : ''}<b class="num">${fmt(planned.e1rm)}</b> ${deltaHTML(planned.e1rm, pm?.e1rm)}</span>
       <span>Top set ${pm ? `${fmt(pm.topWeight)}×${fmt(pm.topReps)} → ` : ''}<b class="num">${top}</b></span>`;
   } else if (e.kind === 'cardio') {
-    foot = `<span>Distance ${pm ? `${fmt(pm.distance)} → ` : ''}<b class="num">${fmt(planned.distance)} ${dunit()}</b></span>
+    const settings = M.cardioFields(S(), e.exerciseId)
+      .map((f) => `<span>${CARDIO_LABEL[f]} ${pm?.[f] ? `${fmt(pm[f])} → ` : ''}<b class="num">${fmt(planned[f])}</b> ${deltaHTML(planned[f], pm?.[f])}</span>`)
+      .join('');
+    foot = `${settings}<span>Distance ${pm ? `${fmt(pm.distance)} → ` : ''}<b class="num">${fmt(planned.distance)} ${dunit()}</b></span>
       ${planned.pace ? `<span>Pace ${pm?.pace ? `${fmtPace(pm.pace)} → ` : ''}<b class="num">${fmtPace(planned.pace)}</b></span>` : ''}`;
   } else if (M.isHold(e.kind)) {
     foot = `<span>Longest hold ${pm ? `${fmtSec(pm.longestHold)} → ` : ''}<b class="num">${fmtSec(planned.longestHold)}</b> ${deltaHTML(planned.longestHold, pm?.longestHold)}</span>`;
@@ -792,9 +840,14 @@ function setsBody(e, prev) {
 function cardioBody(e) {
   const c = e.cardio;
   const field = (key, label) => `<label class="field"><span>${label}</span><input type="text" inputmode="numeric" data-field="value" data-scope="cardio" data-key="${key}" data-entry="${e.id}" data-set="" data-wd="" data-item="" value="${c[key] ? fmtInput(c[key]) : ''}" placeholder="–"></label>`;
+  const settings = M.cardioFields(S(), e.exerciseId)
+    .map((f) => stepper({ scope: 'cardio', key: f, value: c[f] || 0, label: CARDIO_LABEL[f], entry: e.id }))
+    .join('');
+  const est = !c.distance && c.speed ? M.round((c.speed * c.minutes) / 60, 2) : 0;
   return `<div class="cardio-grid">
       ${stepper({ scope: 'cardio', key: 'minutes', value: c.minutes, label: 'Minutes', entry: e.id })}
-      ${stepper({ scope: 'cardio', key: 'distance', value: c.distance, label: `Distance (${dunit()})`, entry: e.id })}
+      ${settings}
+      ${stepper({ scope: 'cardio', key: 'distance', value: c.distance || '', label: est ? `Distance (≈${fmt(est)} ${dunit()})` : `Distance (${dunit()})`, placeholder: est ? fmt(est) : '0', entry: e.id })}
       ${field('calories', 'Calories')}
       ${field('avgHr', 'Avg heart rate')}
     </div>
@@ -814,7 +867,8 @@ function planItemHTML(state, wd, it, i, n) {
   let more = '';
   const open = ui.planMore.has(it.id);
   if (kind === 'cardio') {
-    grid = `<div class="grid2">${st('minutes', 'Minutes')}${st('distance', dunit())}</div>`;
+    const extra = M.cardioFields(state, it.exerciseId).map((f) => stepper({ scope: 'plan', key: f, value: it[f] ?? M.exerciseTarget(state, it.exerciseId)[f] ?? 0, label: CARDIO_LABEL[f], wd, item: it.id, sm: true })).join('');
+    grid = `<div class="grid3">${st('minutes', 'Minutes')}${extra}</div>`;
   } else if (M.isHold(kind)) {
     grid = `<div class="grid3">${st('sets', 'Sets')}${st('setsMax', 'Up to')}${st('holdSec', 'Hold sec')}</div>`;
     if (open && kind !== 'vacuum') more = `<div class="grid3">${st('restSec', 'Rest (0=default)')}</div>`;
@@ -832,9 +886,10 @@ function planItemHTML(state, wd, it, i, n) {
     more += `<label class="field"><span>Note / cue</span><input data-field="plan-note" data-wd="${wd}" data-item="${esc(it.id)}" value="${esc(it.note || '')}" maxlength="300" placeholder="e.g. superset with flyes, 2-sec squeeze"></label>
       <button type="button" class="btn sm" data-action="plan-optional" data-wd="${wd}" data-item="${esc(it.id)}" aria-pressed="${!!it.optional}">${it.optional ? '✓ Optional' : 'Mark as optional'}</button>`;
   }
-  return `<div class="planitem${it.optional ? ' is-optional' : ''}">
+  return `<div class="planitem${it.optional ? ' is-optional' : ''}${it.supersetNext ? ' ss-start' : ''}">
     <div class="planitem-top"><span class="name">${esc(ex.name)}</span>${it.optional ? '<span class="badge opt" title="Optional – skip it if you like">Optional</span>' : ''}
       <button type="button" class="icon-btn" data-action="plan-swap" data-wd="${wd}" data-item="${it.id}" aria-label="Swap ${esc(ex.name)}" title="Swap exercise">${ICON.swap}</button>
+      <button type="button" class="icon-btn" data-action="plan-superset" data-wd="${wd}" data-item="${it.id}" aria-pressed="${!!it.supersetNext}" aria-label="Superset ${esc(ex.name)} with the next exercise" title="Superset with next exercise" ${i === n - 1 ? 'disabled' : ''}>${ICON.link}</button>
       <button type="button" class="icon-btn" data-action="plan-move" data-wd="${wd}" data-item="${it.id}" data-dir="-1" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
       <button type="button" class="icon-btn" data-action="plan-move" data-wd="${wd}" data-item="${it.id}" data-dir="1" aria-label="Move down" ${i === n - 1 ? 'disabled' : ''}>${ICON.down}</button>
       <button type="button" class="icon-btn" data-action="plan-remove" data-wd="${wd}" data-item="${it.id}" aria-label="Remove ${esc(ex.name)}">${ICON.trash}</button></div>
@@ -852,7 +907,9 @@ function planView() {
   const days = order
     .map((wd) => {
       const day = M.planDay(state, wd);
-      const items = day.items.map((it, i) => planItemHTML(state, wd, it, i, day.items.length)).join('');
+      const items = day.items
+        .map((it, i) => planItemHTML(state, wd, it, i, day.items.length) + (it.supersetNext && day.items[i + 1] ? '<div class="ss-link plan" aria-hidden="true"><span>Superset · no rest between</span></div>' : ''))
+        .join('');
       return `<article class="card planday${wd === todayIdx ? ' is-today' : ''}">
         <div class="planday-head">
           <div class="spread"><span class="wdname">${M.planLabel(state, wd)}${wd === todayIdx ? ' · today' : ''}</span>
@@ -920,6 +977,9 @@ const EX_METRICS = {
     ['minutes', 'Minutes', (m) => m.minutes],
     ['distance', 'Distance', (m) => m.distance],
     ['pace', 'Pace', (m) => m.pace],
+    ['speed', 'Speed', (m) => m.speed],
+    ['incline', 'Incline', (m) => m.incline],
+    ['level', 'Level', (m) => m.level],
   ],
   vacuum: HOLD_METRICS,
   timed: HOLD_METRICS,
@@ -931,6 +991,9 @@ function metricFormatter(kind, key) {
   if (['e1rm', 'topWeight', 'volume'].includes(key)) return (v, axis) => (axis ? fmtCompact(v) : `${fmt(v)} ${unit()}`);
   if (key === 'distance') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} ${dunit()}`);
   if (key === 'minutes') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} min`);
+  if (key === 'speed') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} ${speedUnit()}`);
+  if (key === 'incline') return (v, axis) => (axis ? fmt(v) : `incline ${fmt(v)}`);
+  if (key === 'level') return (v, axis) => (axis ? fmt(v) : `level ${fmt(v)}`);
   return (v) => fmt(v);
 }
 
@@ -1129,10 +1192,10 @@ function settingsView() {
   <section class="card">
     <h3>Units</h3>
     <div class="settings-row"><span>Weight unit</span>${seg('set-unit', st.unit, [['lb', 'lb'], ['kg', 'kg']])}</div>
-    <div class="settings-row"><span>Distance unit</span>${seg('set-dunit', st.distanceUnit, [['mi', 'mi'], ['km', 'km']])}</div>
+    <div class="settings-row"><span>Distance &amp; speed</span>${seg('set-dunit', st.distanceUnit, [['mi', 'mi · mph'], ['km', 'km · km/h']])}</div>
     <div class="settings-row"><span>Weight +/− step</span>${stepper({ scope: 'setting', key: 'weightStep', value: st.weightStep })}</div>
     <div class="settings-row"><span>Week starts on</span>${seg('set-weekstart', st.weekStart, [[1, 'Monday'], [0, 'Sunday']])}</div>
-    <p class="hint">Changing units relabels numbers; it doesn't convert past entries.</p>
+    <p class="hint">US units (lb, mi, mph) are the default. Switching units relabels numbers; it doesn't convert past entries.</p>
   </section>
 
   <section class="card stack">
@@ -1246,7 +1309,12 @@ function addExerciseToContext(exId) {
       const i = day.items.findIndex((it) => it.id === sh.item);
       if (i < 0) return;
       const old = day.items[i];
-      day.items[i] = M.exerciseKind(s, old.exerciseId) === kind ? { ...old, exerciseId: exId } : { id: old.id, exerciseId: exId, ...M.defaultTarget(kind), ...(old.note ? { note: old.note } : {}) };
+      const keep = { ...(old.note ? { note: old.note } : {}), ...(old.optional ? { optional: true } : {}), ...(old.supersetNext ? { supersetNext: true } : {}) };
+      if (kind === 'cardio') {
+        // New cardio machine: its own default settings, same duration.
+        day.items[i] = { id: old.id, exerciseId: exId, ...M.defaultTarget(kind), ...M.exerciseTarget(s, exId), ...(old.minutes ? { minutes: old.minutes } : {}), ...keep };
+      } else if (M.exerciseKind(s, old.exerciseId) === kind) day.items[i] = { ...old, exerciseId: exId };
+      else day.items[i] = { id: old.id, exerciseId: exId, ...M.defaultTarget(kind), ...keep };
       day.updatedAt = Date.now();
     });
     toast(`Swapped to ${name}`);
@@ -1255,9 +1323,15 @@ function addExerciseToContext(exId) {
       const i = sess.entries.findIndex((e) => e.id === sh.entry);
       if (i < 0) return;
       const old = sess.entries[i];
-      if (old.kind === kind) {
+      if (old.kind === kind && kind !== 'cardio') {
         // Keep the sets and targets, just change the exercise.
         old.exerciseId = exId;
+      } else if (kind === 'cardio' && old.kind === 'cardio') {
+        // Use the new machine's own settings (or last time's), keep the duration.
+        const last = M.previousEntry(s, exId, ui.date)?.entry.target || {};
+        const fresh = M.makeEntry(s, exId, { ...last, minutes: old.target.minutes, ...(old.target.note ? { note: old.target.note } : {}), ...(old.target.supersetNext ? { supersetNext: true } : {}) }, ui.date);
+        fresh.id = old.id;
+        sess.entries[i] = fresh;
       } else {
         const fresh = M.makeEntry(s, exId, M.previousEntry(s, exId, ui.date)?.entry.target, ui.date);
         fresh.id = old.id;
@@ -1314,7 +1388,7 @@ function stopHoldTimer(save) {
     t.date,
   );
   toast(`Logged a ${fmtSec(sec)} hold`);
-  if (entry) restAfter(entry);
+  if (entry) restAfter(entry, t.date);
 }
 
 const vibrate = (ms) => navigator.vibrate && navigator.vibrate(ms);
@@ -1426,7 +1500,7 @@ const ACTIONS = {
     const e = M.findEntry(session, el.dataset.entry);
     // Store the day first so the entry id stays valid while picking.
     editSession(() => {});
-    openSheet({ mode: 'swap', entry: el.dataset.entry, group: S().exercises[e?.exerciseId]?.group });
+    openSheet({ mode: 'swap', entry: el.dataset.entry, group: S().exercises[e?.exerciseId]?.group, kind: e?.kind === 'cardio' ? 'cardio' : 'all' });
   },
   'hold-timer'(el) {
     const { entry, set } = el.dataset;
@@ -1540,6 +1614,22 @@ const ACTIONS = {
     if (ui.planMore.has(id)) ui.planMore.delete(id);
     else ui.planMore.add(id);
     render();
+  },
+  'superset-entry'(el) {
+    editEntry(el.dataset.entry, (e) => {
+      if (e.target.supersetNext) delete e.target.supersetNext;
+      else e.target.supersetNext = true;
+    });
+  },
+  'plan-superset'(el) {
+    store.update((s) => {
+      const day = s.plan[el.dataset.wd];
+      const it = day.items.find((i) => i.id === el.dataset.item);
+      if (!it) return;
+      if (it.supersetNext) delete it.supersetNext;
+      else it.supersetNext = true;
+      day.updatedAt = Date.now();
+    });
   },
   'plan-optional'(el) {
     store.update((s) => {

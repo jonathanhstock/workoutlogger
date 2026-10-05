@@ -35,6 +35,19 @@ server-side storage, migrate to Postgres instead:
 
 ## Conventions
 
+- **US units by default** (lb, miles, mph); metric (kg, km, km/h) stays
+  available in Settings. New measurements must follow the chosen unit setting
+  (`settings.unit` / `settings.distanceUnit`) and default to US units.
+- Program defaults live in `public/js/program.js`. Plan days and exercises the
+  user hasn't edited (`updatedAt` 0) always follow the program, so changes
+  there reach existing logbooks; anything the user edited is kept.
+- Cardio exercises declare which settings they log (`fields`: speed, incline,
+  level), a default `target`, and a `cue`. Default cardio is the Incline
+  Treadmill Walk at incline 12, 3.0 mph.
+- Supersets: `target.supersetNext` links an exercise to the next one. No rest
+  timer between linked exercises; rest after the last one in the group.
+  Stomach vacuums and cardio never use the rest timer.
+
 - `public/js/model.js` holds all data logic and is shared by the browser, the
   server and the tests. Keep it free of DOM, storage and network code.
 - Never make a page element wider than the screen (iPhone zooms out and gets stuck).
