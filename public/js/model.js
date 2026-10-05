@@ -130,7 +130,7 @@ export function defaultSettings(ts) {
     weekStart: 1,
     planMode: PLAN.mode,
     cycleLength: PLAN.length,
-    cycleStart: todayISO(),
+    cycleStart: PLAN.start || todayISO(),
     restSec: 90,
     autoRest: true,
     restSound: true,
@@ -201,7 +201,9 @@ export function normalizeState(input) {
       weekStart: Number(st.weekStart) === 0 ? 0 : 1,
       planMode: st.planMode === 'weekly' ? 'weekly' : 'cycle',
       cycleLength: Math.round(clampNum(st.cycleLength, 2, MAX_PLAN_DAYS)),
-      cycleStart: isISODate(st.cycleStart) ? st.cycleStart : todayISO(),
+      // Settings nobody has edited yet (updatedAt 0) always follow the
+      // program's start date, so every device and the server agree on it.
+      cycleStart: !Number(st.updatedAt) && PLAN.start ? PLAN.start : isISODate(st.cycleStart) ? st.cycleStart : todayISO(),
       restSec: Math.round(clampNum(st.restSec, 0, 1800)),
       autoRest: st.autoRest !== false,
       restSound: st.restSound !== false,
