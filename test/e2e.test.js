@@ -319,7 +319,7 @@ describe('workout logbook in the browser', () => {
 
     await page.getByRole('button', { name: 'Exercises', exact: true }).click();
     await page.getByText('Full workouts').waitFor();
-    assert.equal(await page.locator('.video-tile', { hasText: 'Glute and leg workout' }).count(), 1);
+    assert.equal(await page.locator('.video-tile', { hasText: 'Glute workout with bands' }).count(), 1);
     await page.locator('[data-field="lib-q"]').fill('hang clean');
     await page.locator('.lib-ex h3', { hasText: 'Hang Clean' }).waitFor();
     assert.equal(await page.locator('.lib-ex').count(), 1);

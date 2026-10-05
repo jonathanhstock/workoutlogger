@@ -150,13 +150,13 @@ const coreCircuit = [
  */
 // Form videos per exercise: [title, YouTube URL]. Every link is checked by
 // `npm run check-videos` (in CI) so a removed or private video is caught.
+// Left out because YouTube refuses to embed them (HTTP 403 from oEmbed):
+//   reverse pec deck https://youtu.be/qdYLu49hg1c, pull-through https://youtu.be/FIFAYRU29xk
 export const VIDEOS = {
   'incline-barbell-bench': [['Incline barbell bench press', 'https://youtu.be/SrqOu55lrYU']],
   'flat-barbell-bench': [['Flat barbell bench press', 'https://youtu.be/ysUTNll8JQ8']],
-  'incline-db-press': [
-    ['Incline dumbbell bench press', 'https://youtu.be/hChjZQhX1Ls'],
-    ['Incline dumbbell bench press (2)', 'https://youtu.be/bDaIL_zKbGs'],
-  ],
+  'incline-db-press': [['Incline dumbbell bench press', 'https://youtu.be/hChjZQhX1Ls']],
+  'incline-db-fly': [['Incline dumbbell fly', 'https://youtu.be/bDaIL_zKbGs']],
   'flat-press': [['Flat dumbbell bench press', 'https://youtu.be/Y_7aHqXeCfQ']],
   'incline-machine-press': [['Incline Hammer Strength press machine', 'https://youtu.be/ig0NyNlSce4']],
   'inner-chest-press': [['Inner chest dumbbell presses', 'https://youtu.be/WCAIi9xvNR8']],
@@ -191,7 +191,6 @@ export const VIDEOS = {
   'shoulder-press': [['Dumbbell shoulder press', 'https://youtu.be/qEwKCR5JCog']],
   'lateral-raise': [['Dumbbell lateral raises', 'https://youtu.be/zpUTA5i16kA']],
   'front-raise': [['Dumbbell front raises', 'https://youtu.be/ALNyDCkW9y8']],
-  'reverse-pec-deck': [['Reverse pec deck (rear delts)', 'https://youtu.be/qdYLu49hg1c']],
   'face-pull': [['Face pulls (rear delts)', 'https://youtu.be/V8dZ3pyiCBo']],
   'upright-row': [['Upright rows', 'https://youtu.be/jaAV-rD45I0']],
   shrug: [['Dumbbell shrugs', 'https://youtu.be/xDt6qbKgLkY']],
@@ -207,7 +206,6 @@ export const VIDEOS = {
   lunge: [['Lunges', 'https://youtu.be/T3W55FZJ1hQ']],
   'seated-calf': [['Seated calf raises', 'https://youtu.be/xz7sqxaJ-Ck']],
   'standing-calf': [['Standing calf raises', 'https://youtu.be/YMmgqO8Jo-k']],
-  'pull-through': [['Pull through exercise', 'https://youtu.be/FIFAYRU29xk']],
   'frog-pump': [['Frog pumps', 'https://youtu.be/MQ62r2V7Lw8']],
   'banded-side-walk': [['Banded side walk', 'https://youtu.be/CPvijTQz6a0']],
   adductor: [['Adduction and abduction machine', 'https://youtu.be/MwXtApoiVEc']],
@@ -218,9 +216,9 @@ export const VIDEOS = {
 
 // Full workouts (not tied to one exercise), shown at the top of the Exercises tab.
 export const WORKOUT_VIDEOS = [
-  ['Glute and leg workout', 'https://youtu.be/1skBf6h2ksI'],
-  ['Full body HIIT workout', 'https://youtu.be/8J2pCRDTK9o'],
-  ['Home leg workout with bands', 'https://www.youtube.com/watch?v=HG3cwzZ1lyo'],
+  ['15-min full body HIIT (no equipment)', 'https://youtu.be/1skBf6h2ksI'],
+  ['HIIT workout at home (no equipment)', 'https://youtu.be/8J2pCRDTK9o'],
+  ['Glute workout with bands (at home)', 'https://www.youtube.com/watch?v=HG3cwzZ1lyo'],
   ['Upper body workout with bands', 'https://youtu.be/ou0n5aO_K9Y'],
   ['Ab workouts', 'https://youtu.be/4-r3Yz7GfdM'],
 ];
