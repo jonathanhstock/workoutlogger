@@ -130,7 +130,7 @@ export function defaultSettings(ts) {
     weekStart: 1,
     planMode: PLAN.mode,
     cycleLength: PLAN.length,
-    cycleStart: todayISO(),
+    cycleStart: PLAN.start || todayISO(),
     restSec: 90,
     autoRest: true,
     restSound: true,

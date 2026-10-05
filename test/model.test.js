@@ -67,6 +67,12 @@ describe('the starting program', () => {
     assert.equal(s.plan[3].dayType, 'active');
   });
 
+  test('the rotation starts with Day 1 on Oct 5, 2026', () => {
+    const s = M.defaultState();
+    assert.equal(M.planIndex(s, '2026-10-05'), 0);
+    assert.equal(M.planIndex(s, '2026-10-09'), 4); // Legs, after the first rest day
+  });
+
   test('every plan item references a real exercise', () => {
     const s = fresh();
     for (const i of M.planOrder(s)) for (const it of s.plan[i].items) assert.ok(s.exercises[it.exerciseId], it.exerciseId);
