@@ -150,7 +150,7 @@ const coreCircuit = [
  */
 // Form videos per exercise: [title, YouTube URL]. Every link is checked by
 // `npm run check-videos` (in CI) so a removed or private video is caught.
-// Left out because YouTube refuses to embed them (HTTP 403 from oEmbed):
+// Replaced because YouTube refused to embed them (HTTP 403 from oEmbed):
 //   reverse pec deck https://youtu.be/qdYLu49hg1c, pull-through https://youtu.be/FIFAYRU29xk
 export const VIDEOS = {
   'incline-barbell-bench': [['Incline barbell bench press', 'https://youtu.be/SrqOu55lrYU']],
@@ -191,6 +191,7 @@ export const VIDEOS = {
   'shoulder-press': [['Dumbbell shoulder press', 'https://youtu.be/qEwKCR5JCog']],
   'lateral-raise': [['Dumbbell lateral raises', 'https://youtu.be/zpUTA5i16kA']],
   'front-raise': [['Dumbbell front raises', 'https://youtu.be/ALNyDCkW9y8']],
+  'reverse-pec-deck': [['Reverse pec deck (rear delts)', 'https://youtu.be/dC7jhEk-29A']],
   'face-pull': [['Face pulls (rear delts)', 'https://youtu.be/V8dZ3pyiCBo']],
   'upright-row': [['Upright rows', 'https://youtu.be/jaAV-rD45I0']],
   shrug: [['Dumbbell shrugs', 'https://youtu.be/xDt6qbKgLkY']],
@@ -206,6 +207,7 @@ export const VIDEOS = {
   lunge: [['Lunges', 'https://youtu.be/T3W55FZJ1hQ']],
   'seated-calf': [['Seated calf raises', 'https://youtu.be/xz7sqxaJ-Ck']],
   'standing-calf': [['Standing calf raises', 'https://youtu.be/YMmgqO8Jo-k']],
+  'pull-through': [['Cable pull-through', 'https://youtu.be/DbSF7ipBh5Y']],
   'frog-pump': [['Frog pumps', 'https://youtu.be/MQ62r2V7Lw8']],
   'banded-side-walk': [['Banded side walk', 'https://youtu.be/CPvijTQz6a0']],
   adductor: [['Adduction and abduction machine', 'https://youtu.be/MwXtApoiVEc']],
