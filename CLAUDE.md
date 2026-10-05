@@ -17,6 +17,15 @@ This file holds notes, conventions and ideas for future updates, not only rules.
   "Generated with Claude Code", no `Co-Authored-By: Claude` trailer, and no
   links to Claude sessions. The same goes for comments posted on PRs.
 
+## Code comments
+
+- Every time you create a new function, add a one-sentence comment directly
+  above it describing what it does.
+- When you edit a file, add the same one-sentence comment above any existing
+  function that doesn't already have one.
+- Use the language's normal comment style (e.g. `///` in Swift, `//` or JSDoc
+  `/** */` in JS/TS, a docstring in Python).
+
 ## Storage: current setup and when to change it
 
 The app is for one person. The server keeps the logbook in
