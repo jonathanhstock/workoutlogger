@@ -11,6 +11,12 @@ This file holds notes, conventions and ideas for future updates, not only rules.
 - `npm run test:e2e` – Playwright browser tests (phone + desktop viewports)
 - `npm run check-videos` – verifies every YouTube link (needs internet; runs in CI)
 
+## Git and pull requests
+
+- Commit messages and PR descriptions contain no AI attribution: no
+  "Generated with Claude Code", no `Co-Authored-By: Claude` trailer, and no
+  links to Claude sessions. The same goes for comments posted on PRs.
+
 ## Storage: current setup and when to change it
 
 The app is for one person. The server keeps the logbook in
