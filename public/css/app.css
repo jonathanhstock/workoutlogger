@@ -296,6 +296,8 @@ html, body { overscroll-behavior-y: none; }
 .daytitle .dow { font-size: 20px; font-weight: 750; letter-spacing: -.01em; }
 .daytitle .date { font-size: 13px; color: var(--muted); }
 .daytitle input[type="date"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; min-height: 0; }
+/* "Back to today" sits above the invisible date picker so it gets the tap. */
+.daytitle .link-btn { position: relative; z-index: 1; }
 .today-pill { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 1px 7px; border-radius: 999px; margin-left: 4px; }
 
 .weekstrip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }

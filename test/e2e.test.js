@@ -561,6 +561,13 @@ describe('workout logbook in the browser', () => {
     await page.getByRole('button', { name: /Logbook: go to today/ }).click();
     await page.locator('.today-pill').waitFor();
     assert.equal(await page.locator('.tabbar [aria-current="page"]').textContent().then((t) => t.trim()), 'Log');
+
+    // "Back to today" under the date works too (a real click, so nothing may
+    // sit on top of it).
+    await page.getByRole('button', { name: 'Next day' }).click();
+    await page.getByRole('button', { name: 'Next day' }).click();
+    await page.getByRole('button', { name: 'Back to today' }).click({ timeout: 3000 });
+    await page.locator('.today-pill').waitFor();
     assert.deepEqual(errors, []);
     await context.close();
   });
