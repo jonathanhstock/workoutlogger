@@ -31,7 +31,7 @@ Notes for that migration:
 - Photos go in object storage (Cloudflare R2, S3, Cloudinary), not on the server.
 - On first start, import the existing `logbook.json` so no data is lost, then
   drop the Render disk from `render.yaml`.
-- The browser's offline copy in localStorage stays as it is; it's a client
+- The browser's offline copy (IndexedDB) stays as it is; it's a client
   cache, not server state.
 
 ## Conventions
@@ -54,6 +54,21 @@ Notes for that migration:
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
   timer between linked exercises; rest after the last one in the group.
   Stomach vacuums and cardio never use the rest timer.
+- Speed: the server gzips/brotlis app files once and answers revalidation with
+  ETag 304s; syncs are gzipped both ways and get an empty 204 when nothing is
+  newer. The browser keeps one IndexedDB row per record (`store.js`), so a tap
+  saves only that day. Model helpers that run during render must not scan or
+  sort the whole history per item (see `datesInRange`); check with a few years
+  of fake data when adding charts or lists.
+- Fitbit: `google-health.js` (server only) talks to the Google Health API
+  (`health.googleapis.com/v4`; it replaced the Fitbit Web API on 2026-09-30).
+  OAuth tokens live in `DATA_DIR/google.json` and never go to the browser or
+  the logbook. Imports land in `state.health[date]` (steps, restingHr,
+  sleepMin, activities) and in `state.body` with `source: 'fitbit'`;
+  `applyHealthImport` in `model.js` never overwrites a weigh-in the user
+  typed. The API's description document is at
+  `https://health.googleapis.com/$discovery/rest?version=v4`, which is useful
+  for checking field names.
 - `public/js/model.js` holds all data logic and is shared by the browser, the
   server and the tests. Keep it free of DOM, storage and network code.
 - Never make a page element wider than the screen (iPhone zooms out and gets stuck).
@@ -90,14 +105,8 @@ Not built yet. Roughly in order of usefulness for this app.
      next to the weight trend.
    - For one person this fits in the current logbook file; Postgres is only
      needed for the multi-user case above.
-8. **Fitbit / Google health data**: pull steps, resting heart rate, sleep,
-   weight (Aria scale) and logged activities through Google's Fitbit Web API.
-   This is a cloud API, so it works from a web app:
-   - register an app with Google;
-   - OAuth sign-in once, redirecting back to the Render URL;
-   - the server stores the refresh token as a secret or in the logbook file;
-   - a daily sync fills scale weight and cardio automatically.
-   Google has been moving Fitbit's developer APIs over to its own platform,
-   so check which API is current before building.
+8. **Fitbit trends**: steps, resting heart rate and sleep charts in Progress,
+   and Fitbit workouts suggested as cardio entries (data is already imported
+   into `state.health`).
 9. **Apple Health sync**: needs a native iOS app; a web app can't read
    HealthKit.

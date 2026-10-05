@@ -30,9 +30,10 @@ const charts = [];
 let holdTimer = null; // running vacuum / plank hold timer
 let pendingRender = false;
 
-const store = createStore({
+const store = await createStore({
   onChange({ remote }) {
-    drafts.clear();
+    // Drafts are dropped in render(), so ids in the DOM stay valid until the
+    // page is redrawn (a sync can arrive while you're typing).
     if (remote && isTyping()) pendingRender = true;
     else render();
   },
@@ -54,7 +55,8 @@ function esc(v) {
 const nf = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const nf1 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const fmt = (n) => nf.format(Number(n) || 0);
-const fmtCompact = (n) => (Math.abs(n) >= 10000 ? new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n) : fmt(n));
+const nfCompact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+const fmtCompact = (n) => (Math.abs(n) >= 10000 ? nfCompact.format(n) : fmt(n));
 
 function fmtSec(sec) {
   sec = Math.round(sec || 0);
@@ -77,8 +79,14 @@ function fmtPace(minPerUnit) {
   return `${m}:${String(s).padStart(2, '0')}/${dunit()}`;
 }
 
+// toLocaleDateString builds a new formatter on every call, which adds up
+// across charts and history lists; reuse one per set of options.
+const dateFormats = new Map();
 function fmtDate(iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) {
-  return M.parseISODate(iso).toLocaleDateString(undefined, opts);
+  const key = JSON.stringify(opts);
+  let f = dateFormats.get(key);
+  if (!f) dateFormats.set(key, (f = new Intl.DateTimeFormat(undefined, opts)));
+  return f.format(M.parseISODate(iso));
 }
 
 const speedUnit = () => (dunit() === 'km' ? 'km/h' : 'mph');
@@ -318,6 +326,7 @@ function focusKey(n) {
 
 function render() {
   pendingRender = false;
+  drafts.clear();
   hideTip();
   // Keep focus (and caret) in the same logical field across re-renders.
   const active = document.activeElement;
@@ -557,8 +566,33 @@ function bodyWeightCard() {
   const diffHTML = diff === null ? '' : diff === 0 ? '<span class="delta flat">no change</span>' : `<span class="delta ${diff < 0 ? 'down-good' : 'up-neutral'}">${diff > 0 ? '+' : ''}${nf1.format(diff)} ${unit()}</span>`;
   return `<section class="card bw">
     <div class="bw-head"><span class="bw-icon">${ICON.scale}</span><div><div class="label">Scale weight</div>
-      <div class="small muted">${diffHTML ? `${diffHTML} vs ${fmtDate(prev.date, { month: 'short', day: 'numeric' })} · ` : ''}7-day avg <b class="num">${nf1.format(avg)}</b></div></div></div>
+      <div class="small muted">${diffHTML ? `${diffHTML} vs ${fmtDate(prev.date, { month: 'short', day: 'numeric' })} · ` : ''}7-day avg <b class="num">${nf1.format(avg)}</b>${state.body[ui.date]?.source === 'fitbit' ? ' · from Fitbit' : ''}</div></div></div>
     <div class="bw-input">${stepper({ scope: 'body', key: 'weight', value: w || '', label: '', placeholder: 'e.g. 182.4' })}<span class="muted small">${unit()}</span></div>
+  </section>`;
+}
+
+/** Steps, resting heart rate, sleep and activities imported from Fitbit. */
+function healthCard() {
+  const h = S().health?.[ui.date];
+  if (!h || !(h.steps || h.restingHr || h.sleepMin || h.activities?.length)) return '';
+  const km = (v) => (dunit() === 'km' ? v : v * 0.621371);
+  const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const stats = [
+    h.steps ? stat('Steps', fmt(h.steps)) : '',
+    h.restingHr ? stat('Resting HR', `${h.restingHr} <small>bpm</small>`) : '',
+    h.sleepMin ? stat('Sleep', `${Math.floor(h.sleepMin / 60)}h ${h.sleepMin % 60}m`) : '',
+  ].join('');
+  const acts = (h.activities || [])
+    .map((a) => {
+      const bits = [a.start, a.minutes ? `${fmt(Math.round(a.minutes))} min` : '', a.calories ? `${fmt(a.calories)} cal` : '', a.avgHr ? `avg ${a.avgHr} bpm` : '', a.distanceKm ? `${nf1.format(km(a.distanceKm))} ${dunit()}` : ''].filter(Boolean);
+      // Keep "1.7 mi" and "52 min" together when the line wraps.
+      return `<li><b>${esc(a.name)}</b> <span class="muted small">${esc(bits.map((b) => b.replace(/ /g, '\u00a0')).join(' · '))}</span></li>`;
+    })
+    .join('');
+  return `<section class="card health" aria-label="Fitbit data">
+    <span class="label">Fitbit</span>
+    ${stats ? `<div class="stats">${stats}</div>` : ''}
+    ${acts ? `<ul class="health-acts">${acts}</ul>` : ''}
   </section>`;
 }
 
@@ -635,6 +669,7 @@ function logView() {
   <nav class="weekstrip" aria-label="This week">${week}</nav>
 
   ${bodyWeightCard()}
+  ${healthCard()}
 
   <section class="card dayhead">
     <div class="dayhead-top">
@@ -879,7 +914,9 @@ let wakeLock = null;
 
 try {
   const saved = JSON.parse(localStorage.getItem(HIIT_KEY) || 'null');
-  if (saved && saved.phases && !M.hiitPosition(saved.phases, (saved.pausedAt || Date.now()) - saved.startedAt - saved.pausedMs).done) hiit = saved;
+  // Restored even if it finished while the app was closed: the first tick
+  // then logs it (finishHiit) instead of losing the session.
+  if (saved && saved.phases) hiit = saved;
 } catch {
   /* ignore */
 }
@@ -1305,25 +1342,23 @@ function progressView() {
       ${rows ? `<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>${ex.kind === 'strength' ? 'Sets (weight×reps)' : M.isHold(ex.kind) ? 'Holds' : 'Session'}</th><th class="r">RPE</th><th class="r">${esc(metrics.find((m) => m[0] === mKey)[1])}</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}`;
   }
 
-  // Session history
-  const history = M.sessionDates(state)
-    .filter((d) => d >= from && d <= to)
-    .reverse()
-    .map((d) => {
-      const s = state.sessions[d];
-      const worked = s.entries.filter(M.entryHasWork);
-      if (!worked.length && !s.notes) return '';
-      const r = M.rangeSummary(state, d, d);
-      const bits = [r.sets ? `${r.sets} sets · ${fmtCompact(r.volume)} ${unit()}` : '', r.cardioMin ? `${fmt(r.cardioMin)} min cardio` : '', r.vacuumSec ? `${fmtSec(r.vacuumSec)} vacuum` : ''].filter(Boolean).join(' · ');
-      return `<button type="button" class="history-item" data-action="open-date" data-date="${d}">
-        <div class="d"><span>${fmtDate(d, { month: 'short' })}</span><b>${M.parseISODate(d).getDate()}</b></div>
-        <div class="body"><div class="t">${esc(s.name || M.DAY_TYPES[s.dayType])} <span class="muted small">${fmtDate(d, { weekday: 'short' })}</span></div>
-        <div class="s">${bits || 'Notes only'} — ${esc(worked.map((e) => M.exerciseName(state, e.exerciseId)).join(', '))}</div></div>
-        <span class="muted">${ICON.right}</span></button>`;
-    })
-    .filter(Boolean)
-    .slice(0, 150)
-    .join('');
+  // Session history (newest first, at most 150 rows)
+  const rows = [];
+  const dates = M.sessionDates(state).filter((d) => d >= from && d <= to);
+  for (let i = dates.length - 1; i >= 0 && rows.length < 150; i--) {
+    const d = dates[i];
+    const s = state.sessions[d];
+    const worked = s.entries.filter(M.entryHasWork);
+    if (!worked.length && !s.notes) continue;
+    const r = M.rangeSummary(state, d, d);
+    const bits = [r.sets ? `${r.sets} sets · ${fmtCompact(r.volume)} ${unit()}` : '', r.cardioMin ? `${fmt(r.cardioMin)} min cardio` : '', r.vacuumSec ? `${fmtSec(r.vacuumSec)} vacuum` : ''].filter(Boolean).join(' · ');
+    rows.push(`<button type="button" class="history-item" data-action="open-date" data-date="${d}">
+      <div class="d"><span>${fmtDate(d, { month: 'short' })}</span><b>${M.parseISODate(d).getDate()}</b></div>
+      <div class="body"><div class="t">${esc(s.name || M.DAY_TYPES[s.dayType])} <span class="muted small">${fmtDate(d, { weekday: 'short' })}</span></div>
+      <div class="s">${bits || 'Notes only'} — ${esc(worked.map((e) => M.exerciseName(state, e.exerciseId)).join(', '))}</div></div>
+      <span class="muted">${ICON.right}</span></button>`);
+  }
+  const history = rows.join('');
 
   return `
   <div class="spread"><h2>Progress</h2><span class="muted small">${fmtDate(from, { month: 'short', day: 'numeric', year: 'numeric' })} – ${fmtDate(to, { month: 'short', day: 'numeric', year: 'numeric' })}</span></div>
@@ -1353,19 +1388,87 @@ function progressView() {
 // Settings view
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fitbit / Google Health
+// ---------------------------------------------------------------------------
+
+let google = null; // server status, see api/google/status
+let googleChecked = 0;
+
+function agoText(t) {
+  const min = Math.round((Date.now() - t) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 48 * 60) return `${Math.round(min / 60)} h ago`;
+  return fmtDate(M.toISODate(new Date(t)), { month: 'short', day: 'numeric' });
+}
+
+function googleCard() {
+  const g = google;
+  let body;
+  if (!g) {
+    body = `<p class="hint">${store.status === 'local' ? 'Needs the server (the Render app) to connect.' : 'Checking…'}</p>`;
+  } else if (g.auth) {
+    body = '<p class="hint">Enter your server password above first.</p>';
+  } else if (!g.configured) {
+    body = `<p class="hint">Bring in steps, resting heart rate, sleep, weigh-ins and workouts from your Fitbit. To turn it on, add <b>GOOGLE_CLIENT_ID</b> and <b>GOOGLE_CLIENT_SECRET</b> to the server's environment (Render → Environment), and register this redirect URI in Google Cloud:</p>
+      <code class="copy">${esc(g.redirectUri)}</code>`;
+  } else if (!g.connected || g.needsReconnect) {
+    body = `<p class="hint">${g.needsReconnect ? '<b>Google sign-in expired.</b> Connect again to keep importing.' : 'Sign in with the Google account your Fitbit uses. The app imports steps, resting heart rate, sleep, weigh-ins (unless you typed one in yourself) and workouts, read-only.'}</p>
+      <button type="button" class="btn primary" data-action="google-connect" style="align-self:flex-start">Connect Fitbit</button>`;
+  } else {
+    body = `<p class="hint">Connected${g.lastSync ? ` · last import ${agoText(g.lastSync)}` : ''}. New data comes in when you open the app.</p>
+      ${g.lastError ? `<p class="hint warn">${esc(g.lastError)}</p>` : ''}
+      <div class="row wrap">
+        <button type="button" class="btn sm" data-action="google-sync">Import now</button>
+        <button type="button" class="btn sm danger" data-action="google-disconnect">Disconnect</button>
+      </div>`;
+  }
+  return `<section class="card stack" id="google-card"><h3>Fitbit</h3>${body}</section>`;
+}
+
+function renderGoogleCard() {
+  const node = document.getElementById('google-card');
+  if (node && !isTyping()) node.outerHTML = googleCard();
+}
+
+async function refreshGoogle() {
+  if (store.status === 'local') return null;
+  try {
+    google = await store.request('api/google/status');
+  } catch (err) {
+    google = err.status === 401 ? { auth: true } : err.data?.configured !== undefined ? err.data : null;
+  }
+  googleChecked = Date.now();
+  renderGoogleCard();
+  return google;
+}
+
+/** Import from Fitbit (the server skips it if it ran in the last few minutes). */
+async function googleImport(force = false) {
+  try {
+    const res = await store.request('api/google/sync', { method: 'POST', body: { force, today: M.todayISO() } });
+    google = res;
+    renderGoogleCard();
+    if (res.changed) await store.sync();
+    return res;
+  } catch (err) {
+    if (err.data?.configured !== undefined) google = err.data;
+    renderGoogleCard();
+    throw err;
+  }
+}
+
+async function autoGoogle() {
+  if (Date.now() - googleChecked < 10 * 60 * 1000) return;
+  const g = await refreshGoogle();
+  if (g?.configured && g.connected && !g.needsReconnect) googleImport().catch(() => {});
+}
+
 function settingsView() {
   const state = S();
   const st = state.settings;
   const seg = (action, value, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" data-action="${action}" data-value="${v}" aria-pressed="${String(value) === String(v)}">${l}</button>`).join('')}</div>`;
-  const exRows = M.activeExercises(state)
-    .map(
-      (ex) => `<div class="ex-row">
-      <input data-field="ex-name" data-ex="${esc(ex.id)}" value="${esc(ex.name)}" aria-label="Exercise name" maxlength="80">
-      <select data-field="ex-kind" data-ex="${esc(ex.id)}" aria-label="Type">${Object.entries(M.KINDS).map(([k, v]) => `<option value="${k}" ${ex.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-      <button type="button" class="icon-btn" data-action="ex-delete" data-ex="${esc(ex.id)}" aria-label="Delete ${esc(ex.name)}">${ICON.trash}</button>
-    </div>`,
-    )
-    .join('');
   return `
   <h2>Settings</h2>
   <section class="card">
@@ -1400,11 +1503,7 @@ function settingsView() {
     </div>
   </section>
 
-  <section class="card stack">
-    <div class="spread"><h3>Exercise library</h3><button type="button" class="btn sm" data-action="open-add" data-mode="library">+ New</button></div>
-    <p class="hint">Renaming keeps all history. Deleting hides the exercise from pickers but keeps past logs.</p>
-    <div>${exRows}</div>
-  </section>
+  ${googleCard()}
 
   <section class="card stack">
     <h3>Tips</h3>
@@ -1472,7 +1571,6 @@ const VIEWS = { log: logView, plan: planView, exercises: exercisesView, progress
 // ---------------------------------------------------------------------------
 
 function sheetTitle(ctx) {
-  if (ctx.mode === 'library') return 'New exercise';
   if (ctx.mode === 'swap' || ctx.mode === 'plan-swap') return 'Swap for…';
   if (ctx.mode === 'plan') return `Add to ${M.planLabel(S(), ctx.wd)}`;
   return `Add to ${fmtDate(ui.date)}`;
@@ -1483,7 +1581,7 @@ function openSheet(ctx) {
   $sheetPanel.innerHTML = `
     <div class="spread"><h2 id="sheet-title">${esc(sheetTitle(ctx))}</h2>
       <button type="button" class="icon-btn" data-action="close-sheet" aria-label="Close">${ICON.close}</button></div>
-    <input type="search" id="sheet-q" placeholder="${ctx.mode === 'library' ? 'Exercise name' : 'Search or type a new name'}" autocomplete="off" aria-label="Search exercises">
+    <input type="search" id="sheet-q" placeholder="Search or type a new name" autocomplete="off" aria-label="Search exercises">
     <div class="seg" role="group" aria-label="Filter by type" id="sheet-kinds"></div>
     <div class="sheet-list" id="sheet-list"></div>`;
   $sheet.hidden = false;
@@ -1519,14 +1617,9 @@ function renderSheetList() {
       .filter(([k]) => !createKind || k === createKind)
       .map(([k, v]) => `<button type="button" class="btn sm${k === (createKind || 'strength') ? ' primary' : ''}" data-action="create-exercise" data-kind="${k}">${v}</button>`)
       .join('')}</div></div>`;
-  } else if (!q && sh.mode === 'library') {
-    create = '<p class="hint" style="margin:8px 0">Type a name above to create a new exercise.</p>';
   }
-  const items =
-    sh.mode === 'library'
-      ? ''
-      : list.map((e) => `<button type="button" class="pick" data-action="pick-exercise" data-ex="${esc(e.id)}"><span>${esc(e.name)}<br><span class="g">${esc(e.group)}</span></span><span class="badge ${e.kind}">${M.KINDS[e.kind]}</span></button>`).join('');
-  document.getElementById('sheet-list').innerHTML = items ? items + create : create || (sh.mode === 'library' ? '' : '<p class="hint">No exercises yet.</p>');
+  const items = list.map((e) => `<button type="button" class="pick" data-action="pick-exercise" data-ex="${esc(e.id)}"><span>${esc(e.name)}<br><span class="g">${esc(e.group)}</span></span><span class="badge ${e.kind}">${M.KINDS[e.kind]}</span></button>`).join('');
+  document.getElementById('sheet-list').innerHTML = items + create || '<p class="hint">No exercises yet.</p>';
 }
 
 function addExerciseToContext(exId) {
@@ -1636,6 +1729,7 @@ const ACTIONS = {
     ui.tab = el.dataset.tab;
     history.replaceState(null, '', `#${ui.tab}`);
     render();
+    if (ui.tab === 'settings') refreshGoogle();
     window.scrollTo(0, 0);
   },
   'shift-day': (el) => goDate(M.addDays(ui.date, Number(el.dataset.delta))),
@@ -1818,10 +1912,7 @@ const ACTIONS = {
     store.update((s) => {
       id = M.addExercise(s, { name, kind: el.dataset.kind, group: el.dataset.kind === 'strength' ? '' : M.KINDS[el.dataset.kind] });
     });
-    if (ui.sheet.mode === 'library') {
-      closeSheet();
-      toast(`Created ${name}`);
-    } else addExerciseToContext(id);
+    addExerciseToContext(id);
   },
   'save-plan'() {
     const label = M.planLabel(S(), M.planIndex(S(), ui.date));
@@ -1953,33 +2044,47 @@ const ACTIONS = {
   'export-csv'() {
     download(`logbook-sets-${M.todayISO()}.csv`, M.toCSV(S()), 'text/csv');
   },
-  'ex-delete'(el) {
-    const id = el.dataset.ex;
-    const name = M.exerciseName(S(), id);
-    if (!confirm(`Delete “${name}”? It will be removed from your plan. Past logs are kept.`)) return;
-    store.update((s) => {
-      s.exercises[id] = { ...s.exercises[id], deleted: true, updatedAt: Date.now() };
-      for (const day of Object.values(s.plan)) {
-        const before = day.items.length;
-        day.items = day.items.filter((it) => it.exerciseId !== id);
-        if (day.items.length !== before) day.updatedAt = Date.now();
-      }
-    });
+  async 'google-connect'() {
+    try {
+      const { url } = await store.request('api/google/connect', { method: 'POST' });
+      location.href = url;
+    } catch (err) {
+      toast(err.message);
+    }
+  },
+  async 'google-sync'(el) {
+    el.disabled = true;
+    try {
+      const res = await googleImport(true);
+      toast(res.changed ? `Imported ${res.changed} update${res.changed === 1 ? '' : 's'} from Fitbit` : 'Fitbit: nothing new');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      el.disabled = false;
+    }
+  },
+  async 'google-disconnect'() {
+    if (!confirm('Disconnect Fitbit? Data already imported stays in your logbook.')) return;
+    try {
+      google = await store.request('api/google/disconnect', { method: 'POST' });
+      renderGoogleCard();
+      toast('Fitbit disconnected');
+    } catch (err) {
+      toast(err.message);
+    }
   },
   'reset-all'() {
     if (!confirm('Erase ALL workouts, weigh-ins, plans and custom exercises everywhere (this device, the server and your other devices)?')) return;
     if (!confirm('Really erase everything? This cannot be undone. Download a backup first if unsure.')) return;
     stopHoldTimer(false);
     stopRest();
-    // Tombstone everything so the erase also reaches your other devices.
-    store.update((s) => {
-      const fresh = M.defaultState();
-      const t = Date.now();
-      for (const d of Object.keys(s.sessions)) fresh.sessions[d] = { date: d, deleted: true, updatedAt: t };
-      for (const d of Object.keys(s.body)) fresh.body[d] = { weight: 0, updatedAt: t };
-      for (const [id, ex] of Object.entries(s.exercises)) if (!fresh.exercises[id]) fresh.exercises[id] = { ...ex, deleted: true, updatedAt: t };
-      Object.assign(s, fresh);
-    });
+    if (hiit) {
+      hiit = null;
+      saveHiit();
+      keepAwake(false);
+      buildHiitBar();
+    }
+    store.update((s) => M.eraseAll(s));
     toast('All data erased');
   },
 };
@@ -2096,34 +2201,6 @@ const FIELDS = {
     ui.progress.metric = null;
     render();
   },
-  'ex-name'(el) {
-    const name = el.value.trim();
-    if (!name) return render();
-    store.update((s) => {
-      s.exercises[el.dataset.ex].name = name.slice(0, 80);
-      s.exercises[el.dataset.ex].updatedAt = Date.now();
-    });
-  },
-  'ex-kind'(el) {
-    const id = el.dataset.ex;
-    const used = M.sessionDates(S()).some((d) => S().sessions[d].entries.some((e) => e.exerciseId === id));
-    if (used && !confirm('This exercise already has logged sessions. Changing its type only affects new entries. Continue?')) return render();
-    store.update((s) => {
-      s.exercises[id].kind = el.value;
-      s.exercises[id].updatedAt = Date.now();
-      // Plan targets need the fields for the new type.
-      for (const day of Object.values(s.plan)) {
-        let changed = false;
-        for (const it of day.items) {
-          if (it.exerciseId === id) {
-            Object.assign(it, { ...M.defaultTarget(el.value), ...it });
-            changed = true;
-          }
-        }
-        if (changed) day.updatedAt = Date.now();
-      }
-    });
-  },
   import(el) {
     const file = el.files?.[0];
     if (!file) return;
@@ -2151,21 +2228,35 @@ const FIELDS = {
 // Wiring
 // ---------------------------------------------------------------------------
 
+// A typed value is committed on `change`, deferred so focus has moved to
+// wherever the user tapped next. On phones the tap's click can arrive
+// before that, so a click first commits whatever is still pending.
+let pendingField = null;
+
+function flushField() {
+  const el = pendingField;
+  pendingField = null;
+  if (el) FIELDS[el.dataset.field]?.(el);
+}
+
 document.addEventListener('click', (ev) => {
   unlockAudio();
   const el = ev.target.closest('[data-action]');
   if (!el || el.disabled) return;
   const fn = ACTIONS[el.dataset.action];
-  if (fn) fn(el, ev);
+  if (!fn) return;
+  const a = document.activeElement;
+  if (a && a !== el && a.dataset?.field && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) a.blur();
+  flushField();
+  fn(el, ev);
 });
 
 document.addEventListener('change', (ev) => {
   const el = ev.target.closest('[data-field]');
-  if (!el) return;
-  const fn = FIELDS[el.dataset.field];
-  if (!fn) return;
-  // Defer so focus has moved to wherever the user tapped next.
-  setTimeout(() => fn(el), 0);
+  if (!el || !FIELDS[el.dataset.field]) return;
+  if (pendingField && pendingField !== el) flushField();
+  pendingField = el;
+  setTimeout(flushField, 0);
 });
 
 document.addEventListener('keydown', (ev) => {
@@ -2320,6 +2411,7 @@ document.addEventListener('visibilitychange', () => {
     checkToday();
     updateRestBar();
     store.sync();
+    autoGoogle();
   }
 });
 window.addEventListener('online', () => store.sync());
@@ -2337,11 +2429,32 @@ setInterval(checkToday, 60000);
 
 render();
 buildRestBar();
-if (hiit) {
-  keepAwake(true);
-  buildHiitBar();
+const firstSync = store.init();
+
+// Back from Google sign-in (see /api/google/callback).
+const googleParam = new URLSearchParams(location.search).get('google');
+if (googleParam) {
+  const reason = new URLSearchParams(location.search).get('reason');
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (googleParam === 'connected') {
+    toast('Fitbit connected. Importing your data…');
+    firstSync.then(() => googleImport(true)).then(
+      (res) => toast(res?.changed ? 'Fitbit data imported' : 'Fitbit connected'),
+      (err) => toast(err.message),
+    );
+  } else toast(`Couldn't connect Fitbit: ${reason || 'try again'}`);
 }
-store.init();
+firstSync.then(autoGoogle);
+if (hiit) {
+  if (M.hiitPosition(hiit.phases, hiitElapsed()).done) {
+    // It finished while the app was closed: log it once the latest copy of
+    // the day has synced, so the entry it belongs to is there.
+    firstSync.finally(buildHiitBar);
+  } else {
+    keepAwake(true);
+    buildHiitBar();
+  }
+}
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

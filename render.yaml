@@ -17,6 +17,11 @@ services:
         value: /var/data
       - key: APP_PASSWORD
         sync: false # Render asks you for this when you create the service
+      # Optional: Fitbit / Google Health import (see README).
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
     disk:
       name: logbook-data
       mountPath: /var/data

@@ -143,6 +143,25 @@ function programExercise(id, name, kind, group, extra = {}, ts = 0) {
 }
 const PROGRAM_EXERCISES = Object.fromEntries(EXERCISES.map((e) => [e[0], e]));
 
+/**
+ * True for a plan day, exercise or settings record the user hasn't edited,
+ * so it follows program.js. That's `updatedAt` 0, or a record stamped by
+ * "Erase all data" (`reset` equals `updatedAt`; any later edit changes
+ * `updatedAt` and makes it the user's own).
+ */
+function followsProgram(x) {
+  const t = Number(x?.updatedAt) || 0;
+  return !t || Number(x.reset) === t;
+}
+
+/** Program record stamped `t`; with a time it carries the erase marker. */
+function stamp(rec, t) {
+  rec.updatedAt = t;
+  if (t) rec.reset = t;
+  else delete rec.reset;
+  return rec;
+}
+
 export function defaultSettings(ts) {
   return {
     unit: 'lb',
@@ -169,6 +188,7 @@ export function defaultState(ts = now()) {
     plan: defaultPlan(ts),
     sessions: {},
     body: {},
+    health: {},
   };
 }
 
@@ -224,16 +244,18 @@ export function normalizeState(input) {
       cycleLength: Math.round(clampNum(st.cycleLength, 2, MAX_PLAN_DAYS)),
       // Settings nobody has edited yet (updatedAt 0) always follow the
       // program's start date, so every device and the server agree on it.
-      cycleStart: !Number(st.updatedAt) && PLAN.start ? PLAN.start : isISODate(st.cycleStart) ? st.cycleStart : todayISO(),
+      cycleStart: followsProgram(st) && PLAN.start ? PLAN.start : isISODate(st.cycleStart) ? st.cycleStart : todayISO(),
       restSec: Math.round(clampNum(st.restSec, 0, 1800)),
       autoRest: st.autoRest !== false,
       restSound: st.restSound !== false,
       updatedAt: Number(st.updatedAt) || 0,
+      ...(followsProgram(st) && Number(st.updatedAt) ? { reset: Number(st.updatedAt) } : {}),
     },
     exercises: {},
     plan: {},
     sessions: {},
     body: {},
+    health: {},
   };
 
   const needDefaults = !isObj(input.exercises) || !isObj(input.plan);
@@ -242,8 +264,8 @@ export function normalizeState(input) {
   for (const [id, ex] of Object.entries(exercises)) {
     if (!isObj(ex)) continue;
     // Exercises nobody has edited follow the current program definition.
-    if (!Number(ex.updatedAt) && !ex.deleted && PROGRAM_EXERCISES[id]) {
-      out.exercises[id] = programExercise(...PROGRAM_EXERCISES[id]);
+    if (followsProgram(ex) && !ex.deleted && PROGRAM_EXERCISES[id]) {
+      out.exercises[id] = stamp(programExercise(...PROGRAM_EXERCISES[id]), Number(ex.updatedAt) || 0);
       continue;
     }
     const fields = Array.isArray(ex.fields) ? CARDIO_FIELDS.filter((f) => ex.fields.includes(f)) : null;
@@ -266,15 +288,15 @@ export function normalizeState(input) {
   for (let i = 0; i < MAX_PLAN_DAYS; i++) {
     const d = plan[i];
     // Plan days nobody has edited follow the current program.
-    if (!isObj(d) || !Number(d.updatedAt)) {
-      out.plan[i] = programDay(i, 0);
+    if (!isObj(d) || followsProgram(d)) {
+      out.plan[i] = stamp(programDay(i, 0), Number(d?.updatedAt) || 0);
       continue;
     }
     out.plan[i] = {
       name: String(d.name || '').slice(0, 60),
       dayType: DAY_TYPES[d.dayType] ? d.dayType : 'training',
       note: String(d.note || '').slice(0, 500),
-      items: (Array.isArray(d.items) ? d.items : []).filter((it) => isObj(it) && it.exerciseId).map((it) => ({ id: String(it.id || uid()), exerciseId: String(it.exerciseId), ...normalizeTarget(it) })),
+      items: (Array.isArray(d.items) ? d.items : []).filter((it) => isObj(it) && it.exerciseId).map((it) => ({ id: cleanId(it.id), exerciseId: String(it.exerciseId), ...normalizeTarget(it) })),
       updatedAt: Number(d.updatedAt) || 0,
     };
   }
@@ -300,15 +322,50 @@ export function normalizeState(input) {
   const body = isObj(input.body) ? input.body : {};
   for (const [date, b] of Object.entries(body)) {
     if (!isISODate(date) || !isObj(b)) continue;
-    out.body[date] = { weight: round(clampNum(b.weight, 0, 2000), 2), updatedAt: Number(b.updatedAt) || 0 };
+    out.body[date] = { weight: round(clampNum(b.weight, 0, 2000), 2), ...(b.source === 'fitbit' ? { source: 'fitbit' } : {}), updatedAt: Number(b.updatedAt) || 0 };
+  }
+
+  const health = isObj(input.health) ? input.health : {};
+  for (const [date, h] of Object.entries(health)) {
+    if (isISODate(date) && isObj(h)) out.health[date] = normalizeHealth(h);
   }
   return out;
+}
+
+/** A day of Fitbit / Google Health data (imported by the server). */
+function normalizeHealth(h) {
+  const out = {};
+  const int = (v, max) => Math.round(clampNum(v, 0, max));
+  if (h.steps) out.steps = int(h.steps, 1000000);
+  if (h.restingHr) out.restingHr = int(h.restingHr, 260);
+  if (h.sleepMin) out.sleepMin = int(h.sleepMin, 1440);
+  if (Array.isArray(h.activities) && h.activities.length) {
+    out.activities = h.activities
+      .filter(isObj)
+      .slice(0, 20)
+      .map((a) => ({
+        name: String(a.name || 'Activity').slice(0, 60),
+        start: /^\d\d:\d\d$/.test(a.start) ? a.start : '',
+        minutes: round(clampNum(a.minutes, 0, 1440), 1),
+        calories: int(a.calories, 100000),
+        avgHr: int(a.avgHr, 260),
+        distanceKm: round(clampNum(a.distanceKm, 0, 10000), 2),
+        steps: int(a.steps, 1000000),
+      }));
+  }
+  out.updatedAt = Number(h.updatedAt) || 0;
+  return out;
+}
+
+/** Record ids go into HTML attributes, so keep them to safe characters. */
+function cleanId(v) {
+  return String(v ?? '').replace(/[^\w-]/g, '').slice(0, 40) || uid();
 }
 
 function normalizeEntry(e) {
   const kind = KINDS[e.kind] ? e.kind : 'strength';
   const out = {
-    id: String(e.id || uid()),
+    id: cleanId(e.id),
     exerciseId: String(e.exerciseId),
     kind,
     target: { ...defaultTarget(kind), ...normalizeTarget(e.target) },
@@ -331,8 +388,8 @@ function normalizeEntry(e) {
   } else {
     out.sets = (Array.isArray(e.sets) ? e.sets : []).filter(isObj).map((s) => {
       const set = isHold(kind)
-        ? { id: String(s.id || uid()), holdSec: clampNum(s.holdSec), done: !!s.done }
-        : { id: String(s.id || uid()), reps: clampNum(s.reps), weight: clampNum(s.weight), done: !!s.done };
+        ? { id: cleanId(s.id), holdSec: clampNum(s.holdSec), done: !!s.done }
+        : { id: cleanId(s.id), reps: clampNum(s.reps), weight: clampNum(s.weight), done: !!s.done };
       if (!isHold(kind) && SET_TYPES[s.type] && s.type !== 'work') set.type = s.type;
       if (s.done && Number(s.at)) set.at = Number(s.at);
       return set;
@@ -374,11 +431,37 @@ export function mergeStates(a, b) {
     plan: mergeMap(a.plan, b.plan),
     sessions: mergeMap(a.sessions, b.sessions),
     body: mergeMap(a.body, b.body),
+    health: mergeMap(a.health, b.health),
   };
 }
 
+/** Deep equality that ignores key order (faster than comparing JSON, too). */
 export function statesEqual(a, b) {
-  return JSON.stringify(a) === JSON.stringify(b);
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) if (!Object.hasOwn(b, k) || !statesEqual(a[k], b[k])) return false;
+  return true;
+}
+
+/**
+ * "Erase all data": tombstone every workout and weigh-in so the erase
+ * reaches other devices too, and put the plan, exercises and settings back to
+ * the program (still following future program updates).
+ */
+export function eraseAll(state, t = now()) {
+  const fresh = defaultState(t);
+  stamp(fresh.settings, t);
+  for (const ex of Object.values(fresh.exercises)) stamp(ex, t);
+  for (const day of Object.values(fresh.plan)) stamp(day, t);
+  for (const d of Object.keys(state.sessions)) fresh.sessions[d] = { date: d, deleted: true, updatedAt: t };
+  for (const d of Object.keys(state.body)) fresh.body[d] = { weight: 0, updatedAt: t };
+  for (const d of Object.keys(state.health || {})) fresh.health[d] = { updatedAt: t };
+  for (const [id, ex] of Object.entries(state.exercises)) if (!fresh.exercises[id]) fresh.exercises[id] = { ...ex, deleted: true, updatedAt: t };
+  Object.assign(state, fresh);
+  return state;
 }
 
 // ---------------------------------------------------------------------------
@@ -905,13 +988,29 @@ export function dayStatus(state, date) {
   return planned ? 'planned' : 'empty';
 }
 
+/**
+ * Keys of a by-date map that fall in [from, to], in no particular order.
+ * Short ranges (a day, a week) look the days up directly instead of scanning
+ * years of history, which keeps charts and lists fast as the logbook grows.
+ */
+function datesInRange(map, from, to) {
+  const n = daysBetween(from, to) + 1;
+  if (n > 0 && n <= 400 && n < Object.keys(map).length) {
+    const out = [];
+    for (let i = 0, d = from; i < n; i++, d = addDays(d, 1)) if (map[d]) out.push(d);
+    return out;
+  }
+  return Object.keys(map).filter((d) => d >= from && d <= to);
+}
+
 /** Totals over a date range (inclusive). */
 export function rangeSummary(state, from, to) {
   const sum = { workouts: 0, sets: 0, reps: 0, volume: 0, cardioMin: 0, distance: 0, vacuumSec: 0, vacuumSets: 0, holdSec: 0 };
-  for (const d of sessionDates(state)) {
-    if (d < from || d > to) continue;
+  for (const d of datesInRange(state.sessions, from, to)) {
+    const s = state.sessions[d];
+    if (!s || s.deleted) continue;
     let worked = false;
-    for (const e of state.sessions[d].entries) {
+    for (const e of s.entries) {
       if (!entryHasWork(e)) continue;
       worked = true;
       const m = entryMetrics(e);
@@ -956,10 +1055,10 @@ export function setBodyWeight(state, date, weight) {
 
 /** Weigh-ins in [from, to], oldest first. A weight of 0 means "cleared". */
 export function bodyWeights(state, from = '0000-01-01', to = '9999-12-31') {
-  return Object.entries(state.body)
-    .filter(([d, b]) => b.weight > 0 && d >= from && d <= to)
-    .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([date, b]) => ({ date, weight: b.weight }));
+  return datesInRange(state.body, from, to)
+    .filter((d) => state.body[d].weight > 0)
+    .sort()
+    .map((date) => ({ date, weight: state.body[date].weight }));
 }
 
 export function bodyWeightOn(state, date) {
@@ -969,8 +1068,9 @@ export function bodyWeightOn(state, date) {
 
 /** Last weigh-in strictly before a date. */
 export function previousBodyWeight(state, date) {
-  const list = bodyWeights(state, '0000-01-01', addDays(date, -1));
-  return list[list.length - 1] || null;
+  let best = null;
+  for (const [d, b] of Object.entries(state.body)) if (d < date && b.weight > 0 && (!best || d > best)) best = d;
+  return best ? { date: best, weight: state.body[best].weight } : null;
 }
 
 /** Average of weigh-ins in the `days` days ending on `date`. */
@@ -981,17 +1081,59 @@ export function bodyWeightAverage(state, date, days = 7) {
 }
 
 // ---------------------------------------------------------------------------
+// Fitbit / Google Health import
+// ---------------------------------------------------------------------------
+
+const GRAMS = { lb: 453.59237, kg: 1000 };
+
+/**
+ * Merge imported health data into the logbook. `days` maps a date to
+ * { steps, restingHr, sleepMin, activities }; `weights` maps a date to grams.
+ * A day is only re-stamped when its data changed (so syncs stay quiet), and a
+ * Fitbit weigh-in never replaces one you typed in yourself.
+ * Returns how many records changed.
+ */
+export function applyHealthImport(state, { days = {}, weights = {} }, t = now()) {
+  let changed = 0;
+  state.health ||= {};
+  for (const [date, data] of Object.entries(days)) {
+    if (!isISODate(date)) continue;
+    const old = state.health[date];
+    const next = normalizeHealth({ ...(old && !old.deleted ? old : {}), ...data, updatedAt: t });
+    const same = old ? statesEqual({ ...old, updatedAt: 0 }, { ...next, updatedAt: 0 }) : Object.keys(next).length === 1;
+    if (!same) {
+      state.health[date] = next;
+      changed++;
+    }
+  }
+  const per = GRAMS[state.settings.unit] || GRAMS.lb;
+  for (const [date, grams] of Object.entries(weights)) {
+    if (!isISODate(date) || !(grams > 0)) continue;
+    const cur = state.body[date];
+    if (cur && cur.weight > 0 && cur.source !== 'fitbit') continue;
+    const weight = round(grams / per, 1);
+    if (cur && cur.source === 'fitbit' && cur.weight === weight) continue;
+    state.body[date] = { weight, source: 'fitbit', updatedAt: t };
+    changed++;
+  }
+  return changed;
+}
+
+// ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
 function csvCell(v) {
-  const s = String(v ?? '');
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  let s = String(v ?? '');
+  // Text starting with = + - @ would run as a formula in Excel / Sheets.
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /** One row per logged set / cardio session / weigh-in, for spreadsheets. */
 export function toCSV(state) {
-  const rows = [['date', 'day', 'exercise', 'type', 'set', 'set_type', 'weight', 'reps', 'hold_sec', 'minutes', 'distance', 'calories', 'avg_hr', 'rpe', 'done', `unit=${state.settings.unit}`]];
+  const rows = [['date', 'day', 'exercise', 'type', 'set', 'set_type', 'weight', 'reps', 'hold_sec', 'minutes', 'distance', 'calories', 'avg_hr', 'rpe', 'done', 'unit']];
+  const u = state.settings.unit;
   for (const d of sessionDates(state)) {
     const s = state.sessions[d];
     for (const e of s.entries) {
@@ -999,15 +1141,15 @@ export function toCSV(state) {
       const rpe = e.rpe || '';
       if (e.kind === 'cardio') {
         const c = e.cardio;
-        rows.push([d, s.name, name, 'cardio', 1, '', '', '', '', c.minutes, c.distance, c.calories, c.avgHr, rpe, c.done ? 1 : 0]);
+        rows.push([d, s.name, name, 'cardio', 1, '', '', '', '', c.minutes, c.distance, c.calories, c.avgHr, rpe, c.done ? 1 : 0, state.settings.distanceUnit]);
       } else {
         e.sets.forEach((x, i) => {
           const hold = isHold(e.kind);
-          rows.push([d, s.name, name, e.kind, i + 1, hold ? '' : setType(x), hold ? '' : x.weight, hold ? '' : x.reps, hold ? x.holdSec : '', '', '', '', '', rpe, x.done ? 1 : 0]);
+          rows.push([d, s.name, name, e.kind, i + 1, hold ? '' : setType(x), hold ? '' : x.weight, hold ? '' : x.reps, hold ? x.holdSec : '', '', '', '', '', rpe, x.done ? 1 : 0, hold ? '' : u]);
         });
       }
     }
   }
-  for (const b of bodyWeights(state)) rows.push([b.date, '', 'Body weight', 'bodyweight', '', '', b.weight, '', '', '', '', '', '', '', 1]);
+  for (const b of bodyWeights(state)) rows.push([b.date, '', 'Body weight', 'bodyweight', '', '', b.weight, '', '', '', '', '', '', '', 1, u]);
   return rows.map((r) => r.map(csvCell).join(',')).join('\n') + '\n';
 }

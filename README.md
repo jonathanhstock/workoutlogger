@@ -38,6 +38,9 @@ offline.
   remove 15 s or skip. It beeps and vibrates when rest is over. The app also
   records how long you actually rested.
 - **RPE per exercise** (5–10) is shown next to last time's RPE.
+- **Fitbit import (optional).** Steps, resting heart rate, sleep, weigh-ins
+  and workouts from your Fitbit show up on each day's log. See
+  [Connect Fitbit](#connect-fitbit-optional).
 - **Daily scale weight** with the change since your last weigh-in, a 7-day
   average and a trend chart.
 - **Cardio** (minutes, distance, calories, heart rate) and **timed holds**
@@ -77,6 +80,42 @@ Notes:
   docker run -p 3000:3000 -v logbook-data:/data -e APP_PASSWORD=change-me logbook
   ```
 
+## Connect Fitbit (optional)
+
+The app can import your Fitbit data every time you open it: **steps, resting
+heart rate, sleep, weigh-ins and workouts** (read-only). Weigh-ins you type in
+yourself always win over Fitbit's.
+
+Google replaced the old Fitbit Web API with the **Google Health API** on
+September 30, 2026, so this uses Google sign-in. One-time setup:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), open the
+   project your OAuth client belongs to.
+2. **APIs & Services → Library**: search for **Google Health API** and
+   enable it.
+3. **Google Auth Platform** (OAuth consent screen): user type **External**,
+   add your own Google account under **Test users**, and add these scopes:
+   - `.../auth/googlehealth.activity_and_fitness.readonly`
+   - `.../auth/googlehealth.health_metrics_and_measurements.readonly`
+   - `.../auth/googlehealth.sleep.readonly`
+4. **Clients** → your Web client → **Authorized redirect URIs**: add
+   `https://<your-app>.onrender.com/api/google/callback`. Settings in the app
+   shows the exact address to paste.
+5. On Render → your service → **Environment**, add `GOOGLE_CLIENT_ID` and
+   `GOOGLE_CLIENT_SECRET` (from the client's details or its downloaded JSON).
+   Never commit that JSON file to the repository.
+6. Open the app → **Settings → Fitbit → Connect Fitbit**, and sign in with the
+   Google account your Fitbit uses.
+
+While the Google app is in **Testing**, Google lets a sign-in last only
+**7 days**. When it runs out, Settings says so and you tap **Connect** again.
+Publishing the app ("In production") removes that limit. However, Google
+treats health data as a restricted scope and may require a verification
+review first.
+
+The server keeps the sign-in token in `DATA_DIR/google.json`. It is never
+sent to the browser or included in backups.
+
 ## Run it locally
 
 Requires Node.js 18 or newer. There are no runtime dependencies.
@@ -91,6 +130,8 @@ npm start                # http://localhost:3000
 | `DATA_DIR`     | `./data`   | Where `logbook.json` and `backups/` are stored            |
 | `APP_PASSWORD` | _(none)_   | Password required to read or sync data (enter it in Settings) |
 | `TRUST_PROXY`  | _(off)_    | Set to `1` behind a reverse proxy (automatic on Render)   |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | _(none)_ | Turn on the Fitbit import (see above) |
+| `PUBLIC_URL`   | _(auto)_   | Public address for the Google sign-in redirect (Render's is detected) |
 
 After 10 wrong passwords, the server locks out that address for 15 minutes.
 
@@ -122,6 +163,7 @@ public/js/store.js   Local storage and background sync
 public/js/charts.js  Small SVG chart helpers
 public/js/app.js     UI: Log, Plan, Progress, Settings, rest timer
 public/sw.js         Offline support
+google-health.js     Fitbit / Google Health import (server side)
 render.yaml          One-click Render deployment
 test/                Unit, server and end-to-end tests
 ```

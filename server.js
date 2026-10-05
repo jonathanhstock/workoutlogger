@@ -11,8 +11,10 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { defaultState, mergeStates, normalizeState } from './public/js/model.js';
+import { applyHealthImport, defaultState, mergeStates, normalizeState, statesEqual } from './public/js/model.js';
+import { createGoogleHealth } from './google-health.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -20,6 +22,8 @@ const MAX_BODY = 20 * 1024 * 1024;
 const BACKUPS_KEPT = 30;
 const MAX_FAILURES = 10;
 const LOCKOUT_MS = 15 * 60 * 1000;
+
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.webmanifest', '.svg']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -32,7 +36,7 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-export function createServer({ dataDir = path.join(ROOT, 'data'), password = '', trustProxy = false } = {}) {
+export function createServer({ dataDir = path.join(ROOT, 'data'), password = '', trustProxy = false, google: googleOpts = {} } = {}) {
   const dbFile = path.join(dataDir, 'logbook.json');
   const backupDir = path.join(dataDir, 'backups');
   fs.mkdirSync(backupDir, { recursive: true });
@@ -40,20 +44,69 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
   let state = loadState(dbFile);
   // Serialize writes so concurrent requests can't interleave.
   let writeChain = Promise.resolve();
+  let unsaved = false; // the last write failed; retry on the next sync
 
   function save(next) {
     state = next;
     const json = JSON.stringify(next);
-    writeChain = writeChain.then(async () => {
+    // A failed write must not block every later one, so each link starts
+    // from a settled chain. The caller still sees its own write's error.
+    const write = writeChain.catch(() => {}).then(async () => {
       const tmp = `${dbFile}.${process.pid}.tmp`;
       await fsp.writeFile(tmp, json);
       await fsp.rename(tmp, dbFile);
-      const day = new Date().toISOString().slice(0, 10);
-      await fsp.writeFile(path.join(backupDir, `logbook-${day}.json`), json);
-      const old = (await fsp.readdir(backupDir)).filter((f) => f.startsWith('logbook-')).sort().slice(0, -BACKUPS_KEPT);
-      await Promise.all(old.map((f) => fsp.unlink(path.join(backupDir, f))));
+      unsaved = false;
+      // Backups are a bonus: a failure there shouldn't fail the sync.
+      try {
+        const day = new Date().toISOString().slice(0, 10);
+        await fsp.writeFile(path.join(backupDir, `logbook-${day}.json`), json);
+        const old = (await fsp.readdir(backupDir)).filter((f) => f.startsWith('logbook-')).sort().slice(0, -BACKUPS_KEPT);
+        await Promise.all(old.map((f) => fsp.unlink(path.join(backupDir, f))));
+      } catch (err) {
+        console.error('Backup failed', err);
+      }
     });
-    return writeChain;
+    write.catch(() => {
+      unsaved = true;
+    });
+    writeChain = write;
+    return write;
+  }
+
+  const google = createGoogleHealth({ dataDir, ...googleOpts });
+
+  /** Pull Fitbit / Google Health data into the logbook. */
+  async function importHealth(opts) {
+    const result = await google.sync(opts);
+    if (!result) return 0;
+    if (result.errors.length) console.error('Google Health import:', result.errors.join(' · '));
+    const next = structuredClone(state);
+    const changed = applyHealthImport(next, result);
+    if (changed) await save(next);
+    return changed;
+  }
+
+  async function handleGoogle(req, res, url) {
+    const route = url.pathname.slice('/api/google/'.length);
+    if (route === 'status' && req.method === 'GET') return sendJson(res, 200, google.status(req));
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    if (route === 'connect') return sendJson(res, 200, { url: google.connectUrl(req) });
+    if (route === 'disconnect') {
+      await google.disconnect();
+      return sendJson(res, 200, google.status(req));
+    }
+    if (route === 'sync') {
+      let opts = {};
+      try {
+        opts = JSON.parse((await readBody(req)) || '{}');
+      } catch {
+        /* defaults */
+      }
+      const today = /^\d{4}-\d{2}-\d{2}$/.test(opts.today) ? opts.today : undefined;
+      const changed = await importHealth({ force: !!opts.force, today });
+      return sendJson(res, 200, { ...google.status(req), changed });
+    }
+    return sendJson(res, 404, { error: 'Not found' });
   }
 
   // Slow down password guessing: after too many failures from one address,
@@ -71,6 +124,19 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
 
   async function handleApi(req, res, url) {
     if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, auth: !!password });
+    // Google sends the browser back here after sign-in. It can't carry the
+    // app password; the one-time `state` it returns proves we started it.
+    if (url.pathname === '/api/google/callback') {
+      let to = '/?google=connected#settings';
+      try {
+        await google.finishConnect(req, url);
+        importHealth({ force: true }).catch((err) => console.error('Google Health import failed', err));
+      } catch (err) {
+        to = `/?google=error&reason=${encodeURIComponent(err.message)}#settings`;
+      }
+      res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     const ip = clientIp(req);
     const f = failures.get(ip);
     if (f && f.until > Date.now()) return sendJson(res, 429, { error: 'Too many attempts. Try again later.' });
@@ -84,24 +150,63 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
     }
     if (f) failures.delete(ip);
 
+    if (url.pathname.startsWith('/api/google/')) {
+      try {
+        return await handleGoogle(req, res, url);
+      } catch (err) {
+        return sendJson(res, err.status || 502, { error: err.message, ...google.status(req) });
+      }
+    }
+
     if (url.pathname === '/api/state') {
-      if (req.method === 'GET') return sendJson(res, 200, state);
+      if (req.method === 'GET') return sendJson(res, 200, state, req);
       if (req.method === 'PUT' || req.method === 'POST') {
         let incoming;
         try {
-          incoming = JSON.parse(await readBody(req));
+          incoming = JSON.parse(await readBody(req, req.headers['content-encoding'] === 'gzip'));
         } catch (err) {
           return sendJson(res, err.status || 400, { error: err.message || 'Invalid JSON' });
         }
         // `replace` is used by "Import (replace)"; normal sync always merges,
         // so a stale device can never wipe out newer data.
-        const next = url.searchParams.get('mode') === 'replace' ? normalizeState(incoming) : mergeStates(state, incoming);
-        await save(next);
-        return sendJson(res, 200, next);
+        const replace = url.searchParams.get('mode') === 'replace';
+        const theirs = normalizeState(incoming);
+        const next = replace ? theirs : mergeStates(state, theirs);
+        // Only touch the disk when something actually changed.
+        if (replace || unsaved || !statesEqual(next, state)) await save(next);
+        // The app asks for an empty reply when it already has everything,
+        // which spares the phone from parsing the whole logbook again.
+        if (req.headers['x-sync-unchanged'] === 'empty' && statesEqual(next, theirs)) {
+          res.writeHead(204, { 'Cache-Control': 'no-store' });
+          return res.end();
+        }
+        return sendJson(res, 200, next, req);
       }
       return sendJson(res, 405, { error: 'Method not allowed' });
     }
     return sendJson(res, 404, { error: 'Not found' });
+  }
+
+  // App files never change while the server runs, so each one is read and
+  // compressed once, then served from memory with an ETag. Phones revalidate
+  // with a tiny 304 instead of downloading the file again.
+  const files = new Map(); // abs path -> Promise<{ type, etag, raw, gzip, br }>
+
+  function loadFile(file) {
+    if (!files.has(file)) {
+      const p = fsp.readFile(file).then((raw) => {
+        const ext = path.extname(file);
+        const f = { type: MIME[ext] || 'application/octet-stream', etag: `"${crypto.createHash('sha1').update(raw).digest('base64url').slice(0, 20)}"`, raw };
+        if (COMPRESSIBLE.has(ext) && raw.length > 512) {
+          f.gzip = zlib.gzipSync(raw, { level: 9 });
+          f.br = zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length } });
+        }
+        return f;
+      });
+      p.catch(() => files.delete(file));
+      files.set(file, p);
+    }
+    return files.get(file);
   }
 
   async function serveStatic(req, res, url) {
@@ -114,19 +219,31 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
     if (rel.endsWith('/')) rel += 'index.html';
     const file = path.normalize(path.join(PUBLIC_DIR, rel));
     if (!file.startsWith(PUBLIC_DIR + path.sep)) return sendText(res, 403, 'Forbidden');
+    let f;
     try {
-      const data = await fsp.readFile(file);
-      res.writeHead(200, {
-        'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-        // Always revalidate so updates reach phones quickly; the service
-        // worker handles offline use.
-        'Cache-Control': 'no-cache',
-        'X-Content-Type-Options': 'nosniff',
-      });
-      res.end(req.method === 'HEAD' ? undefined : data);
+      f = await loadFile(file);
     } catch {
-      sendText(res, 404, 'Not found');
+      return sendText(res, 404, 'Not found');
     }
+    const headers = {
+      'Content-Type': f.type,
+      // Always revalidate so updates reach phones quickly; the ETag makes
+      // that a 304 when nothing changed. The service worker handles offline.
+      'Cache-Control': 'no-cache',
+      ETag: f.etag,
+      'X-Content-Type-Options': 'nosniff',
+    };
+    if (f.gzip) headers.Vary = 'Accept-Encoding';
+    if (req.headers['if-none-match'] === f.etag) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
+    const enc = f.gzip ? pickEncoding(req) : '';
+    const body = enc === 'br' ? f.br : enc === 'gzip' ? f.gzip : f.raw;
+    if (enc) headers['Content-Encoding'] = enc;
+    headers['Content-Length'] = body.length;
+    res.writeHead(200, headers);
+    res.end(req.method === 'HEAD' ? undefined : body);
   }
 
   return http.createServer(async (req, res) => {
@@ -157,25 +274,50 @@ function loadState(file) {
   }
 }
 
-function readBody(req) {
+function readBody(req, gzipped = false) {
   return new Promise((resolve, reject) => {
+    const tooLarge = () => Object.assign(new Error('Body too large'), { status: 413 });
     let size = 0;
     const chunks = [];
     req.on('data', (c) => {
       size += c.length;
       if (size > MAX_BODY) {
-        reject(Object.assign(new Error('Body too large'), { status: 413 }));
+        reject(tooLarge());
         req.destroy();
       } else chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => {
+      const buf = Buffer.concat(chunks);
+      if (!gzipped) return resolve(buf.toString('utf8'));
+      // The phone gzips large syncs; cap the unzipped size too.
+      zlib.gunzip(buf, { maxOutputLength: MAX_BODY }, (err, out) => {
+        if (err) reject(err.code === 'ERR_BUFFER_TOO_LARGE' ? tooLarge() : Object.assign(new Error('Invalid gzip body'), { status: 400 }));
+        else resolve(out.toString('utf8'));
+      });
+    });
     req.on('error', reject);
   });
 }
 
-function sendJson(res, status, body) {
-  res.writeHead(status, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
-  res.end(JSON.stringify(body));
+function pickEncoding(req) {
+  const accept = String(req?.headers['accept-encoding'] || '');
+  if (/\bbr\b/.test(accept)) return 'br';
+  if (/\bgzip\b/.test(accept)) return 'gzip';
+  return '';
+}
+
+function sendJson(res, status, body, req) {
+  let data = Buffer.from(JSON.stringify(body));
+  const headers = { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' };
+  // The logbook grows over time; gzip makes each sync a fraction of the size.
+  if (req && data.length > 1024 && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+    data = zlib.gzipSync(data, { level: 6 });
+    headers['Content-Encoding'] = 'gzip';
+    headers.Vary = 'Accept-Encoding';
+  }
+  headers['Content-Length'] = data.length;
+  res.writeHead(status, headers);
+  res.end(data);
 }
 
 function sendText(res, status, text) {
@@ -188,6 +330,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = createServer({
     dataDir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : undefined,
     password: process.env.APP_PASSWORD || '',
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+      // Render sets RENDER_EXTERNAL_URL to the app's public address.
+      publicUrl: process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '',
+    },
     // Hosts like Render put the real client address in X-Forwarded-For.
     trustProxy: process.env.TRUST_PROXY === '1' || !!process.env.RENDER,
   });
