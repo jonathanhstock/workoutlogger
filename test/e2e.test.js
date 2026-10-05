@@ -193,6 +193,11 @@ describe('workout logbook in the browser', () => {
     const push = () => card(page, 'Triceps Pushdown');
     await push().locator('.set-row.t-warmup .idx', { hasText: 'W' }).waitFor();
     await push().locator('.set-legend').waitFor();
+    // Optional exercises are marked in yellow.
+    const fly = card(page, 'Incline Dumbbell Fly');
+    assert.match(await fly.getAttribute('class'), /is-optional/);
+    await fly.locator('.badge.opt', { hasText: 'Optional' }).waitFor();
+    assert.equal(await card(page, 'Dips').locator('.badge.opt').count(), 0);
     // Tapping a set number cycles its type: warm-up, then drop set.
     await push().locator('.set-row').nth(3).locator('.idx').click();
     await push().locator('.set-row.t-warmup').nth(1).waitFor();
@@ -232,8 +237,11 @@ describe('workout logbook in the browser', () => {
     const first = vac().locator('.set-row').first();
     assert.equal(await first.locator('input').inputValue(), '11');
     assert.equal(await first.locator('.check').getAttribute('aria-pressed'), 'true');
-    await page.locator('#rest .rest-sub', { hasText: 'Stomach Vacuum · 4 sets left' }).waitFor();
-    await page.getByRole('button', { name: 'Skip' }).click();
+    // Vacuums have no rest timer and no RPE.
+    await vac().getByRole('button', { name: /Complete next set/ }).click();
+    await vac().locator('.count', { hasText: '2/5' }).waitFor();
+    assert.equal(await page.locator('#rest').isHidden(), true);
+    assert.equal(await vac().locator('.rpe-row').count(), 0);
 
     // Scale weight: first weigh-in, then the stepper.
     await page.getByRole('button', { name: 'Log weight' }).click();
@@ -253,6 +261,7 @@ describe('workout logbook in the browser', () => {
 
     const s = await serverHas(page, (st) => st.body[TODAY]?.weight === 182.6 && todayEntry(st, 'incline-walk').cardio.done && todayEntry(st, 'incline-walk').cardio.minutes === 31);
     assert.equal(todayEntry(s, 'vacuum').sets[0].holdSec, 11);
+    assert.equal(todayEntry(s, 'vacuum').sets.filter((x) => x.done).length, 2);
     assert.deepEqual(errors, []);
     await context.close();
   });

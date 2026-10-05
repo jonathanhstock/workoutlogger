@@ -487,7 +487,8 @@ function updateRestBar() {
 /** Start the rest timer after finishing a set, if enabled. */
 function restAfter(entry) {
   const st = S().settings;
-  if (!st.autoRest || entry.kind === 'cardio') return;
+  // Cardio and stomach vacuums don't use rest periods.
+  if (!st.autoRest || entry.kind === 'cardio' || entry.kind === 'vacuum') return;
   const sec = entry.target.restSec || st.restSec;
   const name = M.exerciseName(S(), entry.exerciseId);
   const left = entry.sets.filter((s) => !s.done).length;
@@ -643,10 +644,10 @@ function entryCard(e, index, count) {
   const allDone = M.entryComplete(e);
   const body = e.kind === 'cardio' ? cardioBody(e) : setsBody(e, prev);
 
-  return `<article class="card entry${allDone ? ' is-done' : ''}${e.target.optional && !M.entryHasWork(e) ? ' is-optional' : ''}" data-entry-id="${e.id}">
+  return `<article class="card entry${allDone ? ' is-done' : ''}${e.target.optional ? ' is-optional' : ''}" data-entry-id="${e.id}">
     <div class="entry-head">
       <div class="entry-title">
-        <h3>${esc(name)} <span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${e.target.optional ? '<span class="badge opt">Optional</span>' : ''}</h3>
+        <h3>${esc(name)} <span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${e.target.optional ? '<span class="badge opt" title="Optional – skip it if you like">Optional</span>' : ''}</h3>
         <div class="target-line"><span>Target <b>${targetText(e.target, e.kind)}</b></span>
           <button type="button" class="link-btn" data-action="toggle-target" data-entry="${e.id}" aria-expanded="${editing}">${editing ? 'Done' : 'Edit target'}</button></div>
         ${e.target.note ? `<div class="cue">${esc(e.target.note)}</div>` : ''}
@@ -671,6 +672,7 @@ function entryCard(e, index, count) {
 }
 
 function rpeRow(e, prev) {
+  if (e.kind === 'vacuum') return ''; // no effort rating for vacuums
   if (e.kind === 'cardio' && !e.cardio.done && !e.rpe) return '';
   const chips = [5, 6, 7, 8, 9, 10].map((v) => `<button type="button" data-action="rpe" data-entry="${e.id}" data-value="${v}" aria-pressed="${e.rpe === v}">${v}</button>`).join('');
   return `<div class="rpe-row"><span class="label" title="Rate of perceived exertion: 10 = maximum effort, nothing left">RPE</span>
@@ -685,7 +687,10 @@ function targetEditor(e, prev) {
   if (e.kind === 'cardio') {
     fields = `<div class="grid2">${st('minutes', 'Minutes')}${st('distance', `Distance (${dunit()})`)}</div>`;
   } else if (M.isHold(e.kind)) {
-    fields = `<div class="grid3">${st('sets', 'Sets')}${st('holdSec', 'Hold (sec)')}${st('restSec', 'Rest (sec)')}</div>`;
+    fields =
+      e.kind === 'vacuum'
+        ? `<div class="grid2">${st('sets', 'Sets')}${st('holdSec', 'Hold (sec)')}</div>`
+        : `<div class="grid3">${st('sets', 'Sets')}${st('holdSec', 'Hold (sec)')}${st('restSec', 'Rest (sec)')}</div>`;
   } else {
     fields = `<div class="grid3">${st('sets', 'Sets')}${st('reps', 'Reps')}${st('weight', unit())}</div>
       <div class="grid3">${st('warmupSets', 'Warm-ups')}${st('dropSets', 'Drop sets')}${st('restSec', 'Rest (sec)')}</div>`;
@@ -761,7 +766,7 @@ function setsBody(e, prev) {
       const p = prevByType(type)[counters[type] - 1];
       const bits = [];
       if (p) bits.push(`Last: ${hold ? fmtSec(p.holdSec) : `${fmt(p.weight)} × ${fmt(p.reps)}`}`);
-      if (rested[s.id]) bits.push(`rested ${fmtClock(rested[s.id])}`);
+      if (rested[s.id] && e.kind !== 'vacuum') bits.push(`rested ${fmtClock(rested[s.id])}`);
       const hint = bits.length ? `<div class="prev-hint">${bits.join(' · ')}</div>` : '';
       const check = `<button type="button" class="check" data-action="toggle-set" data-entry="${e.id}" data-set="${s.id}" aria-pressed="${s.done}" aria-label="Set ${i + 1} done">${ICON.check}</button>`;
       if (hold) {
@@ -812,7 +817,7 @@ function planItemHTML(state, wd, it, i, n) {
     grid = `<div class="grid2">${st('minutes', 'Minutes')}${st('distance', dunit())}</div>`;
   } else if (M.isHold(kind)) {
     grid = `<div class="grid3">${st('sets', 'Sets')}${st('setsMax', 'Up to')}${st('holdSec', 'Hold sec')}</div>`;
-    if (open) more = `<div class="grid3">${st('restSec', 'Rest (0=default)')}</div>`;
+    if (open && kind !== 'vacuum') more = `<div class="grid3">${st('restSec', 'Rest (0=default)')}</div>`;
   } else {
     grid = it.repScheme
       ? `<div class="grid2"><label class="field"><span>Reps per set</span><input data-field="plan-scheme" data-wd="${wd}" data-item="${esc(it.id)}" value="${esc(it.repScheme.join(' '))}" inputmode="numeric" aria-label="Reps per set"></label>${st('weight', `${unit()} (0 = last)`)}</div>`
@@ -827,13 +832,13 @@ function planItemHTML(state, wd, it, i, n) {
     more += `<label class="field"><span>Note / cue</span><input data-field="plan-note" data-wd="${wd}" data-item="${esc(it.id)}" value="${esc(it.note || '')}" maxlength="300" placeholder="e.g. superset with flyes, 2-sec squeeze"></label>
       <button type="button" class="btn sm" data-action="plan-optional" data-wd="${wd}" data-item="${esc(it.id)}" aria-pressed="${!!it.optional}">${it.optional ? '✓ Optional' : 'Mark as optional'}</button>`;
   }
-  return `<div class="planitem">
-    <div class="planitem-top"><span class="name">${esc(ex.name)}</span>${it.optional ? '<span class="badge opt">Optional</span>' : ''}
+  return `<div class="planitem${it.optional ? ' is-optional' : ''}">
+    <div class="planitem-top"><span class="name">${esc(ex.name)}</span>${it.optional ? '<span class="badge opt" title="Optional – skip it if you like">Optional</span>' : ''}
       <button type="button" class="icon-btn" data-action="plan-swap" data-wd="${wd}" data-item="${it.id}" aria-label="Swap ${esc(ex.name)}" title="Swap exercise">${ICON.swap}</button>
       <button type="button" class="icon-btn" data-action="plan-move" data-wd="${wd}" data-item="${it.id}" data-dir="-1" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
       <button type="button" class="icon-btn" data-action="plan-move" data-wd="${wd}" data-item="${it.id}" data-dir="1" aria-label="Move down" ${i === n - 1 ? 'disabled' : ''}>${ICON.down}</button>
       <button type="button" class="icon-btn" data-action="plan-remove" data-wd="${wd}" data-item="${it.id}" aria-label="Remove ${esc(ex.name)}">${ICON.trash}</button></div>
-    <div class="small muted">${targetText(it, kind)}${it.restSec ? ` · rest ${fmtSec(it.restSec)}` : ''}${it.note && !open ? ` · ${esc(it.note)}` : ''}</div>
+    <div class="small muted">${targetText(it, kind)}${it.restSec && kind !== 'vacuum' ? ` · rest ${fmtSec(it.restSec)}` : ''}${it.note && !open ? ` · ${esc(it.note)}` : ''}</div>
     ${grid}${more}
     <button type="button" class="link-btn" data-action="plan-more" data-item="${it.id}" aria-expanded="${open}">${open ? 'Fewer options' : 'More options (ranges, warm-ups, drop sets, rest, notes)'}</button>
   </div>`;
