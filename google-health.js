@@ -37,6 +37,7 @@ const PAGE_SIZE = { sleep: 25, exercise: 25 };
 
 const FIRST_DAYS = 30; // history pulled on the first sync
 const OVERLAP_DAYS = 3; // re-read a few days so late syncs from the watch land
+const MAX_DAYS = 90; // the longest range Google's daily roll-up accepts
 const MIN_INTERVAL_MS = 10 * 60 * 1000; // automatic syncs at most this often
 const STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -306,7 +307,9 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
           failures.push(err.message);
         }
       }
-      if (!sessions) throw new Error(failures[0] || 'no response');
+      // Nothing found and something failed: report it rather than clearing
+      // sleep that was imported before.
+      if (!sessions?.length && failures.length) throw new Error(failures[0]);
       // Sleep counts toward the day you woke up.
       const total = {};
       const seen = new Set();
@@ -375,11 +378,23 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     if (!force && Date.now() - (saved.lastSync || 0) < MIN_INTERVAL_MS) return Promise.resolve(null);
     if (running) return running;
     running = (async () => {
-      const last = saved.lastSync ? iso(new Date(saved.lastSync)) : '';
-      const from = last ? addDays(last, -OVERLAP_DAYS) : addDays(today, -(FIRST_DAYS - 1));
+      // Start from the last import that fully worked (minus a few days for
+      // late watch syncs), so a failed import never leaves a gap. Google's
+      // daily roll-ups cover at most 90 days.
+      const good = saved.lastGood ? iso(new Date(saved.lastGood)) : '';
+      const from = [good ? addDays(good, -OVERLAP_DAYS) : addDays(today, -(FIRST_DAYS - 1)), addDays(today, -(MAX_DAYS - 2))].sort().pop();
       // Ask through tomorrow: Google dates are in your time zone, the server's are UTC.
       const result = { ...(await fetchRange(from, addDays(today, 1))), from, to: today };
-      await writeSaved({ ...saved, lastSync: Date.now(), lastError: result.errors.join(' · '), lastFound: { ...result.found, from: result.from, to: result.to } });
+      // Disconnected while this ran: don't bring the file back.
+      if (!saved?.refreshToken) return result;
+      const t = Date.now();
+      await writeSaved({
+        ...saved,
+        lastSync: t,
+        ...(result.errors.length ? {} : { lastGood: t }),
+        lastError: result.errors.join(' · '),
+        lastFound: { ...result.found, from: result.from, to: result.to },
+      });
       return result;
     })().finally(() => {
       running = null;

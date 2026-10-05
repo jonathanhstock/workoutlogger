@@ -553,7 +553,7 @@ function updateRestBar() {
     rest.done = true;
     saveRest();
     beep();
-    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    vibrate([200, 100, 200]);
   }
   $rest.classList.add('is-done');
   label.textContent = 'Rest over';
@@ -1483,6 +1483,7 @@ function agoText(t) {
 // Says what the last Fitbit import found, so "no data" is easy to tell from "not working".
 function foundText(f) {
   if (!f) return '';
+  // Formats a count with the right singular or plural word.
   const n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
   const range = f.from && f.to ? ` (${fmtDate(f.from, { month: 'short', day: 'numeric' })} – ${fmtDate(f.to, { month: 'short', day: 'numeric' })})` : '';
   const bits = [n(f.steps || 0, 'day of steps', 'days of steps'), n(f.sleep || 0, 'sleep', 'sleeps'), n(f.restingHr || 0, 'resting HR', 'resting HRs'), n(f.weight || 0, 'weigh-in', 'weigh-ins'), n(f.exercise || 0, 'workout', 'workouts')];
@@ -1542,7 +1543,9 @@ async function googleImport(force = false) {
     const res = await store.request('api/google/sync', { method: 'POST', body: { force, today: M.todayISO() } });
     google = res;
     renderGoogleCard();
-    if (res.changed) await store.sync();
+    // After a forced import (e.g. right after connecting) the server may have
+    // new data from an import that already ran, so always pull it.
+    if (res.changed || force) await store.sync();
     return res;
   } catch (err) {
     if (err.data?.configured !== undefined) google = err.data;
@@ -1556,6 +1559,136 @@ async function autoGoogle() {
   if (Date.now() - googleChecked < 10 * 60 * 1000) return;
   const g = await refreshGoogle();
   if (g?.configured && g.connected && !g.needsReconnect) googleImport().catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
+// Timer alerts: notifications when rest or an interval ends with the app closed
+// ---------------------------------------------------------------------------
+
+const ALERTS_KEY = 'workout-logbook:alerts';
+let alertsSent = false;
+
+// Tells whether this browser can receive push notifications at all.
+function alertsSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+// Tells whether this is an iPhone/iPad browser tab rather than the Home Screen app.
+function iosTab() {
+  const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  return ios && !(navigator.standalone || matchMedia('(display-mode: standalone)').matches);
+}
+
+// Tells whether timer alerts are turned on for this device.
+function alertsOn() {
+  try {
+    return localStorage.getItem(ALERTS_KEY) === '1' && alertsSupported() && Notification.permission === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+// Turns the server's base64url public key into the bytes the browser wants.
+function keyBytes(b64) {
+  const bin = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+// Asks for notification permission, subscribes this device and tells the server.
+async function enableAlerts() {
+  if (!alertsSupported()) return toast(iosTab() ? 'Add the app to your Home Screen first' : 'This browser can’t show notifications');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return toast('Notifications are blocked. Allow them in your phone’s settings for this app.');
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const { publicKey } = await store.request('api/push/key');
+    const key = keyBytes(publicKey);
+    let sub = await reg.pushManager.getSubscription();
+    // A subscription made with an older server key won't work; replace it.
+    const old = sub?.options?.applicationServerKey;
+    if (sub && old && !new Uint8Array(old).every((b, i) => b === key[i])) {
+      await sub.unsubscribe();
+      sub = null;
+    }
+    sub ||= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    await store.request('api/push/subscribe', { method: 'POST', body: { subscription: sub.toJSON() } });
+    localStorage.setItem(ALERTS_KEY, '1');
+    toast('Timer alerts on');
+  } catch (err) {
+    toast(`Couldn’t turn on alerts: ${err.message}`);
+  }
+  renderAlertsCard();
+}
+
+// Unsubscribes this device from timer alerts.
+async function disableAlerts() {
+  try {
+    localStorage.removeItem(ALERTS_KEY);
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    if (sub) {
+      await store.request('api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
+      await sub.unsubscribe();
+    }
+    toast('Timer alerts off');
+  } catch (err) {
+    toast(err.message);
+  }
+  renderAlertsCard();
+}
+
+/** The notifications to send for the running timers: rest end and each interval switch. */
+function pendingAlerts(now = Date.now()) {
+  const items = [];
+  if (rest && !rest.done && rest.endsAt > now) {
+    items.push({ at: rest.endsAt, title: 'Rest over', body: rest.label ? `${rest.label} · next set!` : 'Next set!', tag: 'rest' });
+  }
+  if (hiit && !hiit.pausedAt) {
+    const pos = M.hiitPosition(hiit.phases, hiitElapsed());
+    if (!pos.done) {
+      let at = now + pos.remaining * 1000;
+      for (let i = pos.index + 1; i < hiit.phases.length; i++) {
+        const p = hiit.phases[i];
+        items.push({ at, title: p.kind === 'hard' ? `Go hard! ${p.label}` : p.label, body: `${hiit.name} · ${fmtClock(p.sec)}`, tag: 'hiit' });
+        at += p.sec * 1000;
+      }
+      items.push({ at, title: 'HIIT done', body: `${hiit.name} · open the app to log it`, tag: 'hiit' });
+    }
+  }
+  return items;
+}
+
+/** Tells the server which alerts to push while the app is hidden, or cancels them. */
+function sendTimerAlerts(hidden) {
+  if (!alertsOn()) return;
+  const items = hidden ? pendingAlerts() : [];
+  if (!items.length && !alertsSent) return;
+  alertsSent = items.length > 0;
+  store.request('api/push/schedule', { method: 'POST', body: { items }, keepalive: true }).catch(() => {});
+}
+
+// Builds the Timer alerts card in Settings.
+function alertsCard() {
+  let body;
+  if (!alertsSupported() || iosTab()) {
+    body = iosTab()
+      ? '<p class="hint">To get an alert when rest or an interval ends with the app closed or your phone locked, add this app to your Home Screen (Share → Add to Home Screen), open it from there, and turn alerts on here. iPhone only allows notifications for Home Screen apps.</p>'
+      : '<p class="hint">This browser can’t show notifications.</p>';
+  } else if (store.status === 'local') {
+    body = '<p class="hint">Needs the server (the Render app) to send alerts.</p>';
+  } else if (alertsOn()) {
+    body = `<p class="hint">On for this device. When the app is closed or your phone is locked, you get a notification (with your phone’s sound and vibration) when rest ends and at each interval switch.</p>
+      <div class="row wrap"><button type="button" class="btn sm" data-action="alerts-test">Send a test</button><button type="button" class="btn sm danger" data-action="alerts-off">Turn off</button></div>`;
+  } else {
+    body = `<p class="hint">Get a notification when rest or an interval ends, even with the app closed or your phone locked.${typeof Notification !== 'undefined' && Notification.permission === 'denied' ? ' <b>Notifications are blocked</b> for this app; allow them in your phone’s settings first.' : ''}</p>
+      <button type="button" class="btn primary" data-action="alerts-on" style="align-self:flex-start">Turn on timer alerts</button>`;
+  }
+  return `<section class="card stack" id="alerts-card"><h3>Timer alerts</h3>${body}</section>`;
+}
+
+// Redraws just the Timer alerts card in Settings.
+function renderAlertsCard() {
+  const node = document.getElementById('alerts-card');
+  if (node) node.outerHTML = alertsCard();
 }
 
 // Builds the Settings tab.
@@ -1573,6 +1706,8 @@ function settingsView() {
     <div class="settings-row"><span>Sound when rest is over</span>${seg('set-restsound', st.restSound, [[true, 'On'], [false, 'Off']])}</div>
     <p class="hint">Exercises can have their own rest time (Plan tab → More options). Phones may silence sounds while the screen is locked; the timer still keeps time.</p>
   </section>
+
+  ${alertsCard()}
 
   <section class="card">
     <h3>Units</h3>
@@ -1773,6 +1908,7 @@ function addExerciseToContext(exId) {
       }
     });
     toast(`Swapped to ${name}`);
+    dropStaleHoldTimer();
   } else if (sh.mode === 'session') {
     let newId;
     editSession((sess, s) => {
@@ -1802,6 +1938,15 @@ function goDate(date) {
   render();
 }
 
+// Stops the hold timer without logging if the set it was timing no longer exists.
+function dropStaleHoldTimer() {
+  if (!holdTimer) return;
+  const sess = M.getSession(S(), holdTimer.date);
+  if (M.findEntry(sess || { entries: [] }, holdTimer.entryId)?.sets?.some((x) => x.id === holdTimer.setId)) return;
+  stopHoldTimer(false);
+  render();
+}
+
 // Stops the vacuum / plank hold timer, logging the hold if asked.
 function stopHoldTimer(save) {
   if (!holdTimer) return;
@@ -1809,6 +1954,9 @@ function stopHoldTimer(save) {
   const t = holdTimer;
   holdTimer = null;
   if (!save) return;
+  // The set was removed (or the day reset) while timing: nothing to log.
+  const sess = M.getSession(S(), t.date);
+  if (!M.findEntry(sess || { entries: [] }, t.entryId)?.sets?.some((x) => x.id === t.setId)) return;
   const sec = Math.max(1, Math.round((Date.now() - t.start) / 1000));
   let entry;
   editSession(
@@ -1827,8 +1975,41 @@ function stopHoldTimer(save) {
   if (entry) restAfter(entry, t.date);
 }
 
-// Vibrates the phone, where supported.
-const vibrate = (ms) => navigator.vibrate && navigator.vibrate(ms);
+let hapticLabel = null;
+
+/**
+ * Vibrates the phone with a pattern of on/off milliseconds. Android uses the
+ * Vibration API; iPhone Safari has none, so each pulse taps a hidden iOS
+ * switch control, which makes the phone give a haptic tick (iOS 18+).
+ */
+function vibrate(pattern) {
+  if (navigator.vibrate) {
+    navigator.vibrate(pattern);
+    return;
+  }
+  if (!/iP(hone|ad|od)/.test(navigator.userAgent) && !(navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) return;
+  try {
+    if (!hapticLabel) {
+      hapticLabel = document.createElement('label');
+      hapticLabel.setAttribute('aria-hidden', 'true');
+      hapticLabel.style.cssText = 'position:fixed;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;left:-10px;top:0';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.setAttribute('switch', '');
+      input.tabIndex = -1;
+      hapticLabel.append(input);
+      document.body.append(hapticLabel);
+    }
+    const steps = Array.isArray(pattern) ? pattern : [pattern];
+    let at = 0;
+    for (let i = 0; i < steps.length; i += 2) {
+      setTimeout(() => hapticLabel.click(), at);
+      at += (steps[i] || 0) + (steps[i + 1] || 0);
+    }
+  } catch {
+    /* no haptics */
+  }
+}
 
 const ACTIONS = {
   // Switches to another tab.
@@ -1902,6 +2083,7 @@ const ACTIONS = {
       if (!M.isHold(e.kind)) delete e.target.repScheme;
       e.target.sets = M.isHold(e.kind) ? e.sets.length : M.workingSets(e).length;
     });
+    dropStaleHoldTimer();
   },
   // Removes a set from an entry.
   'remove-set'(el) {
@@ -1943,6 +2125,7 @@ const ACTIONS = {
       index = sess.entries.findIndex((e) => e.id === el.dataset.entry);
       if (index >= 0) [removed] = sess.entries.splice(index, 1);
     });
+    dropStaleHoldTimer();
     if (removed) {
       toast(`Removed ${M.exerciseName(S(), removed.exerciseId)}`, {
         label: 'Undo',
@@ -1969,10 +2152,18 @@ const ACTIONS = {
     stopRest();
     // Store the day first so the ids we're timing are permanent.
     editSession(() => {});
-    holdTimer = { entryId: entry, setId: set, date: ui.date, start: Date.now() };
+    const target = M.findEntry(dayData(ui.date).session, entry)?.target?.holdSec || 0;
+    holdTimer = { entryId: entry, setId: set, date: ui.date, start: Date.now(), target, alerted: false };
     holdTimer.interval = setInterval(() => {
+      const sec = Math.floor((Date.now() - holdTimer.start) / 1000);
       const n = document.querySelector('[data-timer]');
-      if (n) n.textContent = `${Math.floor((Date.now() - holdTimer.start) / 1000)}s`;
+      if (n) n.textContent = `${sec}s`;
+      // Beep and buzz once when the target hold time is reached.
+      if (holdTimer.target && !holdTimer.alerted && sec >= holdTimer.target) {
+        holdTimer.alerted = true;
+        beep(990, 2);
+        vibrate([200, 100, 200]);
+      }
     }, 250);
     render();
   },
@@ -2238,6 +2429,19 @@ const ACTIONS = {
       toast(err.message);
     }
   },
+  // Turns on notifications for timers on this device.
+  'alerts-on': () => enableAlerts(),
+  // Turns off notifications for timers on this device.
+  'alerts-off': () => disableAlerts(),
+  // Sends a test notification to every device with alerts on.
+  async 'alerts-test'() {
+    try {
+      await store.request('api/push/test', { method: 'POST', body: {} });
+      toast('Test sent. Lock your phone to see it if nothing shows.');
+    } catch (err) {
+      toast(err.message);
+    }
+  },
   // Erases all data on every device after asking twice.
   'reset-all'() {
     if (!confirm('Erase ALL workouts, weigh-ins, plans and custom exercises everywhere (this device, the server and your other devices)?')) return;
@@ -2289,11 +2493,21 @@ function editPlanItem(el, fn) {
   });
 }
 
+/**
+ * Reads a typed number: "1,250" (thousands) is 1250, while "82,5" (a decimal
+ * comma) is 82.5. Returns NaN for text that isn't a number.
+ */
+function parseNumber(raw) {
+  const t = String(raw).trim().replace(/\s/g, '');
+  if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) return parseFloat(t.replace(/,/g, ''));
+  return parseFloat(t.replace(',', '.'));
+}
+
 const FIELDS = {
   // Saves a number typed into a stepper box.
   value(el) {
     const raw = String(el.value).trim();
-    const v = parseFloat(raw.replace(',', '.'));
+    const v = parseNumber(raw);
     if (el.dataset.scope === 'body') {
       if (raw === '' || v === 0) return store.update((s) => M.setBodyWeight(s, ui.date, 0));
       if (Number.isNaN(v)) return render();
@@ -2601,7 +2815,10 @@ document.addEventListener('visibilitychange', () => {
     store.sync();
     autoGoogle();
   }
+  // Timer alerts only while the app is out of sight (locked or switched away).
+  sendTimerAlerts(document.visibilityState === 'hidden');
 });
+addEventListener('pagehide', () => sendTimerAlerts(true));
 window.addEventListener('online', () => store.sync());
 
 // Roll "today" forward if the app was left open overnight.

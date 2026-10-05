@@ -38,6 +38,12 @@ offline.
   remove 15 s or skip. It beeps and vibrates when rest is over. The app also
   records how long you actually rested.
 - **RPE per exercise** (5–10) is shown next to last time's RPE.
+- **Timer alerts.** When rest ends, at each HIIT interval switch, and when a
+  hold reaches its target, the app beeps and vibrates (on iPhone, a haptic
+  tick on iOS 18+). Turn on **Settings → Timer alerts** to also get a
+  notification with your phone's sound and vibration when the app is closed
+  or the screen is locked. On iPhone this works in the Home Screen app
+  (iOS 16.4+), not in a Safari tab.
 - **Fitbit import (optional).** Steps, resting heart rate, sleep, weigh-ins
   and workouts from your Fitbit show up on each day's log. See
   [Connect Fitbit](#connect-fitbit-optional).
@@ -164,6 +170,7 @@ public/js/charts.js  Small SVG chart helpers
 public/js/app.js     UI: Log, Plan, Progress, Settings, rest timer
 public/sw.js         Offline support
 google-health.js     Fitbit / Google Health import (server side)
+web-push.js          Timer notifications (Web Push, server side)
 render.yaml          One-click Render deployment
 test/                Unit, server and end-to-end tests
 ```
