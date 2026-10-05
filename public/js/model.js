@@ -111,16 +111,35 @@ function emptyPlanDay(ts) {
   return { name: '', dayType: 'rest', note: '', items: [], updatedAt: ts };
 }
 
+/** The program's version of plan day i. Ids are fixed so every device agrees. */
+function programDay(i, ts) {
+  const d = PLAN.days[i];
+  if (!d) return emptyPlanDay(ts);
+  return { name: d.name, dayType: d.dayType, note: d.note || '', items: d.items.map((it, j) => ({ id: `p${i}-${j}`, ...clone(it) })), updatedAt: ts };
+}
+
 function defaultPlan(ts) {
   const plan = {};
-  for (let i = 0; i < MAX_PLAN_DAYS; i++) {
-    const d = PLAN.days[i];
-    plan[i] = d
-      ? { name: d.name, dayType: d.dayType, note: d.note || '', items: d.items.map((it) => ({ id: uid(), ...clone(it) })), updatedAt: ts }
-      : emptyPlanDay(ts);
-  }
+  for (let i = 0; i < MAX_PLAN_DAYS; i++) plan[i] = programDay(i, ts);
   return plan;
 }
+
+/** Cardio settings an exercise can log. */
+export const CARDIO_FIELDS = ['speed', 'incline', 'level'];
+
+function programExercise(id, name, kind, group, extra = {}, ts = 0) {
+  return {
+    id,
+    name,
+    kind,
+    group,
+    ...(extra.fields ? { fields: [...extra.fields] } : {}),
+    ...(extra.target ? { target: normalizeTarget(extra.target) } : {}),
+    ...(extra.cue ? { cue: extra.cue } : {}),
+    updatedAt: ts,
+  };
+}
+const PROGRAM_EXERCISES = Object.fromEntries(EXERCISES.map((e) => [e[0], e]));
 
 export function defaultSettings(ts) {
   return {
@@ -140,9 +159,7 @@ export function defaultSettings(ts) {
 
 export function defaultState(ts = now()) {
   const exercises = {};
-  for (const [id, name, kind, group] of EXERCISES) {
-    exercises[id] = { id, name, kind, group, updatedAt: ts };
-  }
+  for (const [id, name, kind, group, extra] of EXERCISES) exercises[id] = programExercise(id, name, kind, group, extra, ts);
   return {
     schemaVersion: SCHEMA_VERSION,
     settings: defaultSettings(ts),
@@ -164,7 +181,7 @@ export function defaultTarget(kind) {
 // Validation / migration (used on load, import and by the server)
 // ---------------------------------------------------------------------------
 
-const TARGET_NUMS = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, weight: 100000, warmupSets: 10, warmupReps: 1000, dropSets: 10, failureSets: 10, restSec: 1800, minutes: 100000, distance: 100000, holdSec: 3600 };
+const TARGET_NUMS = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, weight: 100000, warmupSets: 10, warmupReps: 1000, dropSets: 10, failureSets: 10, restSec: 1800, minutes: 100000, distance: 100000, holdSec: 3600, speed: 30, incline: 40, level: 30 };
 
 /** Clean a plan item / entry target. Unknown keys are dropped. */
 export function normalizeTarget(t) {
@@ -179,6 +196,7 @@ export function normalizeTarget(t) {
   }
   if (t.note) out.note = String(t.note).slice(0, 300);
   if (t.optional) out.optional = true;
+  if (t.supersetNext) out.supersetNext = true;
   return out;
 }
 
@@ -195,8 +213,9 @@ export function normalizeState(input) {
   const out = {
     schemaVersion: SCHEMA_VERSION,
     settings: {
-      unit: st.unit === 'kg' ? 'kg' : 'lb',
-      distanceUnit: st.distanceUnit === 'km' ? 'km' : 'mi',
+      // US units only: weights in lb, distance in miles, speed in mph.
+      unit: 'lb',
+      distanceUnit: 'mi',
       weightStep: clampNum(st.weightStep, 0.25, 100) || 5,
       weekStart: Number(st.weekStart) === 0 ? 0 : 1,
       planMode: st.planMode === 'weekly' ? 'weekly' : 'cycle',
@@ -220,21 +239,33 @@ export function normalizeState(input) {
   const exercises = isObj(input.exercises) ? input.exercises : base.exercises;
   for (const [id, ex] of Object.entries(exercises)) {
     if (!isObj(ex)) continue;
+    // Exercises nobody has edited follow the current program definition.
+    if (!Number(ex.updatedAt) && !ex.deleted && PROGRAM_EXERCISES[id]) {
+      out.exercises[id] = programExercise(...PROGRAM_EXERCISES[id]);
+      continue;
+    }
+    const fields = Array.isArray(ex.fields) ? CARDIO_FIELDS.filter((f) => ex.fields.includes(f)) : null;
     out.exercises[id] = {
       id,
       name: String(ex.name || 'Exercise').slice(0, 80),
       kind: KINDS[ex.kind] ? ex.kind : 'strength',
       group: String(ex.group || '').slice(0, 40),
+      ...(fields ? { fields } : {}),
+      ...(isObj(ex.target) ? { target: normalizeTarget(ex.target) } : {}),
+      ...(ex.cue ? { cue: String(ex.cue).slice(0, 200) } : {}),
       updatedAt: Number(ex.updatedAt) || 0,
       ...(ex.deleted ? { deleted: true } : {}),
     };
   }
+  // New exercises added to the program show up in existing logbooks.
+  for (const e of EXERCISES) if (!out.exercises[e[0]]) out.exercises[e[0]] = programExercise(...e);
 
   const plan = isObj(input.plan) ? input.plan : base.plan;
   for (let i = 0; i < MAX_PLAN_DAYS; i++) {
     const d = plan[i];
-    if (!isObj(d)) {
-      out.plan[i] = emptyPlanDay(0);
+    // Plan days nobody has edited follow the current program.
+    if (!isObj(d) || !Number(d.updatedAt)) {
+      out.plan[i] = programDay(i, 0);
       continue;
     }
     out.plan[i] = {
@@ -287,6 +318,9 @@ function normalizeEntry(e) {
     out.cardio = {
       minutes: clampNum(c.minutes),
       distance: clampNum(c.distance),
+      speed: clampNum(c.speed, 0, 30),
+      incline: clampNum(c.incline, 0, 40),
+      level: clampNum(c.level, 0, 30),
       calories: clampNum(c.calories),
       avgHr: clampNum(c.avgHr, 0, 260),
       done: !!c.done,
@@ -360,6 +394,18 @@ export function exerciseName(state, id) {
 
 export function exerciseKind(state, id) {
   return state.exercises[id]?.kind || 'strength';
+}
+
+/** Which cardio settings (speed / incline / level) an exercise logs. */
+export function cardioFields(state, id) {
+  const ex = state.exercises[id];
+  if (!ex || ex.kind !== 'cardio') return [];
+  return ex.fields || CARDIO_FIELDS;
+}
+
+/** The exercise's own default target (e.g. a cardio machine's usual level). */
+export function exerciseTarget(state, id) {
+  return state.exercises[id]?.target || {};
 }
 
 export function addExercise(state, { name, kind = 'strength', group = '' }) {
@@ -440,7 +486,7 @@ function roundToStep(v, step) {
 /** Build a new entry for an exercise, pre-filled from targets and last performance. */
 export function makeEntry(state, exerciseId, target, beforeDate) {
   const kind = exerciseKind(state, exerciseId);
-  const t = { ...defaultTarget(kind), ...normalizeTarget(target || {}) };
+  const t = { ...defaultTarget(kind), ...normalizeTarget(exerciseTarget(state, exerciseId)), ...normalizeTarget(target || {}) };
   if (t.repScheme) {
     t.sets = t.repScheme.length;
     if (!target?.reps) t.reps = t.repScheme[0];
@@ -449,7 +495,7 @@ export function makeEntry(state, exerciseId, target, beforeDate) {
   const prev = beforeDate ? previousEntry(state, exerciseId, beforeDate) : null;
 
   if (kind === 'cardio') {
-    entry.cardio = { minutes: t.minutes, distance: t.distance, calories: 0, avgHr: 0, done: false };
+    entry.cardio = { minutes: t.minutes, distance: t.distance || 0, speed: t.speed || 0, incline: t.incline || 0, level: t.level || 0, calories: 0, avgHr: 0, done: false };
     return entry;
   }
   if (isHold(kind)) {
@@ -526,6 +572,23 @@ export function resetSession(state, date) {
 
 export function findEntry(session, entryId) {
   return session?.entries.find((e) => e.id === entryId) || null;
+}
+
+/**
+ * Supersets: an entry with `target.supersetNext` is paired with the entry
+ * after it. Returns the next exercise in the superset, or null if this is
+ * the last one (which is when you rest).
+ */
+export function supersetNext(session, entryId) {
+  const i = session?.entries.findIndex((e) => e.id === entryId) ?? -1;
+  if (i < 0 || !session.entries[i].target?.supersetNext) return null;
+  return session.entries[i + 1] || null;
+}
+
+/** The entry before this one, if it's linked to this one as a superset. */
+export function supersetPrev(session, entryId) {
+  const i = session?.entries.findIndex((e) => e.id === entryId) ?? -1;
+  return i > 0 && session.entries[i - 1].target?.supersetNext ? session.entries[i - 1] : null;
 }
 
 export function workingSets(entry) {
@@ -667,8 +730,20 @@ export function entryMetrics(entry, onlyDone = true) {
     const c = entry.cardio || {};
     const counted = !onlyDone || c.done;
     const minutes = counted ? c.minutes || 0 : 0;
-    const distance = counted ? c.distance || 0 : 0;
-    return { kind: 'cardio', minutes, distance, calories: counted ? c.calories || 0 : 0, pace: distance > 0 ? round(minutes / distance, 2) : 0, done: !!c.done, load: minutes };
+    // No distance entered? Estimate it from treadmill speed (mph × hours).
+    const distance = counted ? c.distance || (c.speed ? round((c.speed * minutes) / 60, 2) : 0) : 0;
+    return {
+      kind: 'cardio',
+      minutes,
+      distance,
+      speed: counted ? c.speed || 0 : 0,
+      incline: counted ? c.incline || 0 : 0,
+      level: counted ? c.level || 0 : 0,
+      calories: counted ? c.calories || 0 : 0,
+      pace: distance > 0 ? round(minutes / distance, 2) : 0,
+      done: !!c.done,
+      load: minutes,
+    };
   }
   const sets = (entry.sets || []).filter((s) => (!onlyDone || s.done) && setType(s) !== 'warmup');
   if (isHold(entry.kind)) {

@@ -335,6 +335,59 @@ describe('metrics', () => {
   });
 });
 
+describe('cardio options and supersets', () => {
+  test('cardio defaults: incline walk 12 / 3 mph; machines use a level', () => {
+    const s = fresh();
+    const walk = M.makeEntry(s, 'incline-walk', { minutes: 30 });
+    assert.deepEqual([walk.cardio.incline, walk.cardio.speed], [12, 3]);
+    assert.deepEqual(M.cardioFields(s, 'incline-walk'), ['speed', 'incline']);
+    const stairs = M.makeEntry(s, 'stairmaster');
+    assert.equal(stairs.cardio.level, 8);
+    assert.deepEqual(M.cardioFields(s, 'stairmaster'), ['level']);
+    assert.deepEqual(M.cardioFields(s, 'outdoor-walk'), []);
+    const fasted = s.plan[0].items.find((it) => it.exerciseId === 'incline-walk');
+    assert.deepEqual([fasted.incline, fasted.speed], [12, 3]);
+  });
+
+  test('distance is estimated from speed when not entered', () => {
+    const e = { kind: 'cardio', cardio: { minutes: 40, speed: 3, distance: 0, done: true } };
+    assert.equal(M.entryMetrics(e).distance, 2);
+    e.cardio.distance = 2.2;
+    assert.equal(M.entryMetrics(e).distance, 2.2);
+  });
+
+  test('superset links point to the next exercise', () => {
+    const s = fresh();
+    const sess = M.sessionOrDraft(s, D1).session;
+    const press = sess.entries.find((e) => e.exerciseId === 'incline-db-press');
+    const fly = sess.entries.find((e) => e.exerciseId === 'incline-db-fly');
+    assert.equal(M.supersetNext(sess, press.id), fly);
+    assert.equal(M.supersetPrev(sess, fly.id), press);
+    assert.equal(M.supersetNext(sess, fly.id), null);
+  });
+
+  test('always US units', () => {
+    const n = M.normalizeState({ settings: { unit: 'kg', distanceUnit: 'km', updatedAt: 5 }, exercises: {}, plan: {} });
+    assert.deepEqual([n.settings.unit, n.settings.distanceUnit], ['lb', 'mi']);
+  });
+
+  test('saved logbooks pick up program changes for anything not edited', () => {
+    const s = fresh();
+    // Simulate an older saved logbook: untouched day/exercise, one edited day.
+    s.plan[0] = { ...s.plan[0], items: [{ id: 'old', exerciseId: 'incline-walk', minutes: 30 }], updatedAt: 0 };
+    s.plan[1] = { ...s.plan[1], name: 'My back day', updatedAt: 99 };
+    s.exercises['incline-walk'] = { id: 'incline-walk', name: 'Old name', kind: 'cardio', group: 'Cardio', updatedAt: 0 };
+    s.exercises.squat = { ...s.exercises.squat, name: 'Hack squat', updatedAt: 99 };
+    delete s.exercises.stairmaster;
+    const n = M.normalizeState(JSON.parse(JSON.stringify(s)));
+    assert.equal(n.plan[0].items.find((it) => it.exerciseId === 'incline-walk').incline, 12);
+    assert.equal(n.plan[1].name, 'My back day');
+    assert.equal(n.exercises['incline-walk'].name, 'Incline Treadmill Walk');
+    assert.equal(n.exercises.squat.name, 'Hack squat');
+    assert.ok(n.exercises.stairmaster);
+  });
+});
+
 describe('body weight', () => {
   test('weigh-ins, previous, averages and clearing', () => {
     const s = fresh();

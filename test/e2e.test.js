@@ -222,7 +222,9 @@ describe('workout logbook in the browser', () => {
     const { context, page, errors } = await openApp();
 
     const walk = () => card(page, 'Incline Treadmill Walk');
-    await walk().locator('.cue', { hasText: '3 mph · incline 12' }).waitFor();
+    await walk().locator('.cue', { hasText: 'Incline 12 · 3.0 mph' }).waitFor();
+    assert.equal(await walk().getByRole('textbox', { name: 'Incline', exact: true }).inputValue(), '12');
+    assert.equal(await walk().getByRole('textbox', { name: 'Speed (mph)', exact: true }).inputValue(), '3');
     await walk().getByRole('button', { name: 'Increase Minutes' }).click();
     await walk().getByRole('button', { name: 'Mark cardio complete' }).click();
     await walk().locator('.count', { hasText: '1/1' }).waitFor();
@@ -262,6 +264,35 @@ describe('workout logbook in the browser', () => {
     const s = await serverHas(page, (st) => st.body[TODAY]?.weight === 182.6 && todayEntry(st, 'incline-walk').cardio.done && todayEntry(st, 'incline-walk').cardio.minutes === 31);
     assert.equal(todayEntry(s, 'vacuum').sets[0].holdSec, 11);
     assert.equal(todayEntry(s, 'vacuum').sets.filter((x) => x.done).length, 2);
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  test('supersets skip rest between the pair; cardio can be swapped', async () => {
+    const { context, page, errors } = await openApp();
+    const press = () => card(page, 'Incline Dumbbell Press');
+    const fly = () => card(page, 'Incline Dumbbell Fly');
+    await press().locator('.badge.ss').waitFor();
+    await page.locator('.ss-link', { hasText: 'no rest between' }).first().waitFor();
+    // First exercise of the superset: no rest, straight to the next.
+    await press().getByRole('button', { name: /Complete next set/ }).click();
+    await page.locator('#toast', { hasText: 'Superset: straight to Incline Dumbbell Fly' }).waitFor();
+    assert.equal(await page.locator('#rest').isHidden(), true);
+    // Second exercise: now rest before the next round.
+    await fly().getByRole('button', { name: /Complete next set/ }).click();
+    await page.locator('#rest .rest-sub', { hasText: 'Incline Dumbbell Fly' }).waitFor();
+    await page.getByRole('button', { name: 'Skip' }).click();
+
+    // Swap the incline walk for the Stairmaster: it logs a level instead.
+    await card(page, 'Incline Treadmill Walk').getByRole('button', { name: /Swap Incline Treadmill Walk/ }).click();
+    await page.locator('#sheet-kinds [aria-pressed="true"]', { hasText: 'Cardio' }).waitFor();
+    await page.locator('.pick', { hasText: 'Stairmaster' }).click();
+    const stairs = card(page, 'Stairmaster');
+    await stairs.locator('.cue', { hasText: 'don’t hold on' }).waitFor();
+    assert.equal(await stairs.getByRole('textbox', { name: 'Level', exact: true }).inputValue(), '8');
+    assert.equal(await stairs.getByRole('textbox', { name: 'Speed (mph)', exact: true }).count(), 0);
+    await stairs.getByRole('button', { name: 'Increase Level' }).click();
+    await serverHas(page, (s) => todayEntry(s, 'stairmaster')?.cardio.level === 9 && todayEntry(s, 'incline-db-press').sets.some((x) => x.done));
     assert.deepEqual(errors, []);
     await context.close();
   });
