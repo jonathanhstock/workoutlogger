@@ -68,7 +68,19 @@ export function sleepMinutes(sl) {
   return Math.max(0, Math.round(inBed - (Number(sum.minutesAwake) || 0)));
 }
 
-// Converts a Google duration string like "3120s" into seconds.
+/**
+ * The local date (YYYY-MM-DD) a sleep session ended, from Google's civil end
+ * time or, if that's missing, the end timestamp plus its UTC offset.
+ */
+export function wakeDate(sl) {
+  const c = civil(sl?.interval?.civilEndTime?.date);
+  if (c) return c;
+  const end = Date.parse(sl?.interval?.endTime);
+  if (!end) return '';
+  return iso(new Date(end + seconds(sl.interval.endUtcOffset) * 1000));
+}
+
+// Converts a Google duration string like "3120s" (or "-25200s") into seconds.
 const seconds = (dur) => (typeof dur === 'string' && dur.endsWith('s') ? Number(dur.slice(0, -1)) || 0 : 0);
 
 // Creates the Fitbit / Google Health connection: sign-in, token storage and data import.
@@ -122,6 +134,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
       connectedAt: saved?.connectedAt || 0,
       lastSync: saved?.lastSync || 0,
       lastError: saved?.lastError || '',
+      lastFound: saved?.lastFound || null,
       // Permissions left unticked on Google's consent screen.
       missing: saved?.scope ? GOOGLE_SCOPES.filter((sc) => !saved.scope.split(' ').includes(sc)).map((sc) => SCOPE_LABELS[sc]) : [],
       redirectUri: redirectUri(req),
@@ -208,12 +221,15 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     return data;
   }
 
-  /** All pages of a list call (sleep and exercise come 25 at a time). */
-  async function list(type, filter) {
+  /**
+   * All pages of a list call (sleep and exercise come 25 at a time). `how` is
+   * `dataPoints` (one source's records) or `dataPoints:reconcile` (merged).
+   */
+  async function list(type, filter, how = 'dataPoints') {
     const out = [];
     let pageToken = '';
     for (let page = 0; page < 40; page++) {
-      const data = await api('GET', `${type}/dataPoints`, { query: { filter, pageSize: String(PAGE_SIZE[type] || 1000), ...(pageToken ? { pageToken } : {}) } });
+      const data = await api('GET', `${type}/${how}`, { query: { filter, pageSize: String(PAGE_SIZE[type] || 1000), ...(pageToken ? { pageToken } : {}) } });
       out.push(...(data.dataPoints || []));
       pageToken = data.nextPageToken;
       if (!pageToken) break;
@@ -226,6 +242,8 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     const days = {};
     const weights = {};
     const errors = [];
+    // What Google returned, shown in Settings to tell "no data" from "not working".
+    const found = { steps: 0, restingHr: 0, sleep: 0, weight: 0, exercise: 0 };
     // Returns the import record for a date, creating it if needed.
     const day = (d) => (days[d] ||= {});
     // Fills a field on every date in range that got no data, so stale values clear.
@@ -250,6 +268,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
       for (const p of data.rollupDataPoints || []) {
         const d = civil(p.civilStartTime?.date);
         if (d) day(d).steps = Number(p.steps?.countSum) || 0;
+        if (d && Number(p.steps?.countSum)) found.steps++;
       }
       blank('steps', 0);
     });
@@ -259,19 +278,48 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
         const r = p.dailyRestingHeartRate;
         const d = civil(r?.date);
         if (d) day(d).restingHr = Number(r.beatsPerMinute) || 0;
+        if (d) found.restingHr++;
       }
       blank('restingHr', 0);
     });
 
     await step('sleep', async () => {
+      // Google's docs point sleep at the "reconcile" call (one merged stream
+      // across devices); the plain list is a fallback. Each is tried with a
+      // date filter and a timestamp filter, until one returns sessions.
+      const civilFilter = `sleep.interval.civil_end_time >= "${from}" AND sleep.interval.civil_end_time < "${addDays(to, 1)}"`;
+      const timeFilter = `sleep.interval.end_time >= "${addDays(from, -1)}T00:00:00Z" AND sleep.interval.end_time < "${addDays(to, 2)}T00:00:00Z"`;
+      let sessions = null;
+      const failures = [];
+      for (const [how, filter] of [
+        ['dataPoints:reconcile', civilFilter],
+        ['dataPoints:reconcile', timeFilter],
+        ['dataPoints', civilFilter],
+        ['dataPoints', timeFilter],
+      ]) {
+        try {
+          const got = (await list('sleep', filter, how)).filter((p) => p.sleep);
+          sessions = got;
+          if (got.length) break;
+        } catch (err) {
+          if (err.status === 409) throw err;
+          failures.push(err.message);
+        }
+      }
+      if (!sessions) throw new Error(failures[0] || 'no response');
       // Sleep counts toward the day you woke up.
       const total = {};
-      for (const p of await list('sleep', `sleep.interval.civil_end_time >= "${from}" AND sleep.interval.civil_end_time < "${addDays(to, 1)}"`)) {
+      const seen = new Set();
+      for (const p of sessions) {
         const sl = p.sleep;
-        const d = civil(sl?.interval?.civilEndTime?.date);
+        const key = `${sl.interval?.startTime}|${sl.interval?.endTime}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const d = wakeDate(sl);
         // Naps don't count, but the night's main sleep always does.
-        if (!d || (sl.metadata?.nap && !sl.metadata?.mainSleep)) continue;
+        if (!d || d < from || d > to || (sl.metadata?.nap && !sl.metadata?.mainSleep)) continue;
         total[d] = (total[d] || 0) + sleepMinutes(sl);
+        found.sleep++;
       }
       for (const [d, min] of Object.entries(total)) day(d).sleepMin = min;
       blank('sleepMin', 0);
@@ -287,6 +335,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
         if (d && w.weightGrams > 0 && (!latest[d] || at >= latest[d].at)) latest[d] = { at, grams: w.weightGrams };
       }
       for (const [d, v] of Object.entries(latest)) weights[d] = v.grams;
+      found.weight = Object.keys(latest).length;
     });
 
     await step('exercise', async () => {
@@ -309,11 +358,12 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
           steps: Number(m.steps) || 0,
         });
       }
+      found.exercise = Object.values(acts).reduce((n, a) => n + a.length, 0);
       for (const [d, list] of Object.entries(acts)) day(d).activities = list.sort((a, b) => (a.start < b.start ? -1 : 1));
       blank('activities', []);
     });
 
-    return { days, weights, errors };
+    return { days, weights, errors, found };
   }
 
   /**
@@ -328,8 +378,8 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
       const last = saved.lastSync ? iso(new Date(saved.lastSync)) : '';
       const from = last ? addDays(last, -OVERLAP_DAYS) : addDays(today, -(FIRST_DAYS - 1));
       // Ask through tomorrow: Google dates are in your time zone, the server's are UTC.
-      const result = await fetchRange(from, addDays(today, 1));
-      await writeSaved({ ...saved, lastSync: Date.now(), lastError: result.errors.join(' · ') });
+      const result = { ...(await fetchRange(from, addDays(today, 1))), from, to: today };
+      await writeSaved({ ...saved, lastSync: Date.now(), lastError: result.errors.join(' · '), lastFound: { ...result.found, from: result.from, to: result.to } });
       return result;
     })().finally(() => {
       running = null;

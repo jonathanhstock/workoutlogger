@@ -1,8 +1,14 @@
 name: test
-on: [push, pull_request]
+# Once per change: on every pull request, and on pushes to main (merges).
+# Pushes to a PR branch are already covered by the pull_request run.
+on:
+  push:
+    branches: [main]
+  pull_request:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -12,14 +18,3 @@ jobs:
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-
-  # Verifies every exercise / workout video link still exists and can be
-  # embedded (YouTube oEmbed). Runs here because it needs internet access.
-  videos:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm run check-videos

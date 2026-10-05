@@ -266,8 +266,14 @@ describe('Fitbit / Google Health', () => {
         if (sleepForbidden) return json({ error: { message: 'Request had insufficient authentication scopes.' } }, 403);
         // Google caps sleep pages at 25 and may reject anything larger.
         if (u.searchParams.get('pageSize') !== '25') return json({ error: { message: 'Invalid page size' } }, 400);
-        // Two pages, to check paging; a nap doesn't count.
-        if (!u.searchParams.get('pageToken')) return json({ dataPoints: [{ sleep: { interval: { civilEndTime: { date: date('2026-10-04') } }, summary: { minutesAsleep: '400' }, metadata: {} } }], nextPageToken: 'p2' });
+        // Like Google's docs suggest, sleep only comes back from "reconcile";
+        // the plain list returns nothing.
+        if (!u.pathname.endsWith(':reconcile')) return json({ dataPoints: [] });
+        // Two pages, to check paging; a nap doesn't count. The first night has
+        // no civil time, so its date comes from the end time and UTC offset.
+        if (!u.searchParams.get('pageToken')) {
+          return json({ dataPoints: [{ sleep: { interval: { startTime: '2026-10-04T05:30:00Z', endTime: '2026-10-04T13:00:00Z', endUtcOffset: '-25200s' }, summary: { minutesAsleep: '400' }, metadata: { mainSleep: true } } }], nextPageToken: 'p2' });
+        }
         return json({ dataPoints: [{ sleep: { interval: { civilEndTime: { date: date('2026-10-04') } }, summary: { minutesAsleep: '30' }, metadata: { nap: true } } }] });
       }
       if (type === 'weight') {
@@ -338,6 +344,9 @@ describe('Fitbit / Google Health', () => {
       st = await res.json();
       assert.equal(st.connected, true);
       assert.equal(st.lastError, '');
+      assert.equal(st.lastFound.sleep, 1);
+      assert.equal(st.lastFound.steps, 1);
+      assert.equal(st.lastFound.exercise, 1);
       assert.ok(!JSON.stringify(st).includes('rt-secret'));
 
       const s = await (await fetch(`${ctx.base}/api/state`, { headers: auth })).json();

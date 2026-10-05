@@ -1480,6 +1480,15 @@ function agoText(t) {
   return fmtDate(M.toISODate(new Date(t)), { month: 'short', day: 'numeric' });
 }
 
+// Says what the last Fitbit import found, so "no data" is easy to tell from "not working".
+function foundText(f) {
+  if (!f) return '';
+  const n = (v, one, many) => `${v} ${v === 1 ? one : many}`;
+  const range = f.from && f.to ? ` (${fmtDate(f.from, { month: 'short', day: 'numeric' })} – ${fmtDate(f.to, { month: 'short', day: 'numeric' })})` : '';
+  const bits = [n(f.steps || 0, 'day of steps', 'days of steps'), n(f.sleep || 0, 'sleep', 'sleeps'), n(f.restingHr || 0, 'resting HR', 'resting HRs'), n(f.weight || 0, 'weigh-in', 'weigh-ins'), n(f.exercise || 0, 'workout', 'workouts')];
+  return `<p class="hint">Last import found${range}: ${esc(bits.join(' · '))}.</p>`;
+}
+
 // Builds the Fitbit card in Settings for the current connection state.
 function googleCard() {
   const g = google;
@@ -1496,6 +1505,7 @@ function googleCard() {
       <button type="button" class="btn primary" data-action="google-connect" style="align-self:flex-start">Connect Fitbit</button>`;
   } else {
     body = `<p class="hint">Connected${g.lastSync ? ` · last import ${agoText(g.lastSync)}` : ''}. New data comes in when you open the app.</p>
+      ${foundText(g.lastFound)}
       ${g.missing?.length ? `<p class="hint warn">Google didn't allow access to your ${esc(g.missing.join(' or '))}. Tap <b>Connect again</b> and tick every box on Google's screen.</p>` : ''}
       ${g.lastError ? `<p class="hint warn">${esc(g.lastError)}</p>` : ''}
       <div class="row wrap">
