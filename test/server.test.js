@@ -245,6 +245,7 @@ describe('Fitbit / Google Health', () => {
   // Builds a fake Google (sign-in plus Health API) that records every call made to it.
   function fakeGoogle({ expired = false, scope = GOOGLE_SCOPES.join(' '), sleepForbidden = false } = {}) {
     const calls = [];
+    const state = { down: false }; // set to make every data call fail
     // Builds a JSON response with the given status.
     const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
     // Answers a request the way Google would for the endpoints the app uses.
@@ -260,6 +261,7 @@ describe('Fitbit / Google Health', () => {
       }
       if (u.href.startsWith('https://oauth2.googleapis.com/revoke')) return json({});
       const type = u.pathname.split('/dataTypes/')[1]?.split('/')[0];
+      if (type && state.down) return json({ error: { message: 'Service unavailable' } }, 503);
       if (type === 'steps') return json({ rollupDataPoints: [{ civilStartTime: { date: date('2026-10-04') }, steps: { countSum: '9876' } }] });
       if (type === 'daily-resting-heart-rate') return json({ dataPoints: [{ dailyRestingHeartRate: { date: date('2026-10-04'), beatsPerMinute: '57' } }] });
       if (type === 'sleep') {
@@ -302,7 +304,7 @@ describe('Fitbit / Google Health', () => {
       }
       return json({ error: { message: 'unexpected' } }, 404);
     };
-    return { fetch, calls };
+    return { fetch, calls, state };
   }
 
   test('connect, import and disconnect', async () => {
@@ -409,6 +411,36 @@ describe('Fitbit / Google Health', () => {
     assert.equal(sleepMinutes({ stages }), 390);
     assert.equal(sleepMinutes({ interval: { startTime: '2026-10-04T05:00:00Z', endTime: '2026-10-04T12:00:00Z' }, summary: { minutesAwake: '20' } }), 400);
     assert.equal(sleepMinutes({}), 0);
+  });
+
+  test('a failed import does not skip days the next time', async () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'google.json'), JSON.stringify({ refreshToken: 'rt', connectedAt: 1, lastSync: 0 }));
+    const g = fakeGoogle();
+    const ctx = await start({ dataDir: dir, google: { clientId: 'cid', clientSecret: 'csec', fetch: g.fetch } });
+    // Runs a forced Fitbit import for TODAY and returns the status.
+    const sync = async () => (await fetch(`${ctx.base}/api/google/sync`, { method: 'POST', body: JSON.stringify({ force: true, today: TODAY }) })).json();
+    // The steps roll-up request says where each import starts.
+    const lastStart = () => {
+      const c = g.calls.filter((x) => x.url.pathname.endsWith('steps/dataPoints:dailyRollUp')).pop();
+      const d = JSON.parse(c.body).range.start.date;
+      return `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`;
+    };
+    try {
+      g.state.down = true;
+      const st = await sync();
+      assert.match(st.lastError, /Service unavailable/);
+      assert.equal(lastStart(), '2026-09-06');
+      // Google is back: the import still covers the full first 30 days.
+      g.state.down = false;
+      assert.equal((await sync()).lastError, '');
+      assert.equal(lastStart(), '2026-09-06');
+      // After a good import, the next one only re-reads the last few days.
+      await sync();
+      assert.ok(lastStart() > '2026-09-06');
+    } finally {
+      ctx.server.close();
+    }
   });
 
   test('an expired Google sign-in asks to reconnect', async () => {

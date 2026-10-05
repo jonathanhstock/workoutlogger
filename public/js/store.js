@@ -18,8 +18,9 @@ const GZIP_OVER = 8 * 1024; // bytes
 // just that day, right away, instead of rewriting the whole logbook.
 const DB_NAME = 'workout-logbook';
 const DB_STORE = 'records';
-const MAPS = ['exercises', 'plan', 'sessions', 'body'];
+const MAPS = ['exercises', 'plan', 'sessions', 'body', 'health'];
 
+// Opens (or creates) the IndexedDB database that holds the offline copy.
 function openDb() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, 1);
@@ -47,6 +48,7 @@ function rows(state) {
   return out;
 }
 
+// Reads every saved record back into a logbook, or null if nothing is saved.
 async function readAll(db) {
   const got = await dbTx(db, 'readonly', (os) => {
     const keys = os.getAllKeys();
@@ -68,6 +70,7 @@ async function readAll(db) {
   return state;
 }
 
+// Creates the store: loads the offline copy and keeps it saved and synced with the server.
 export async function createStore({ onChange, onSyncStatus }) {
   let db = null;
   const saved = new Map(); // row key -> updatedAt last written
@@ -79,6 +82,7 @@ export async function createStore({ onChange, onSyncStatus }) {
   let serverAvailable = null; // null = unknown
   let status = 'local';
 
+  // Loads the offline copy from IndexedDB, moving an old localStorage copy over if needed.
   async function load() {
     try {
       db = await openDb();
@@ -136,6 +140,7 @@ export async function createStore({ onChange, onSyncStatus }) {
     });
   }
 
+  // Reports a failed save and makes the next save write everything again.
   function fail(err) {
     console.error('Could not save locally', err);
     saved.clear(); // write everything again next time
@@ -164,11 +169,13 @@ export async function createStore({ onChange, onSyncStatus }) {
     });
   }
 
+  // Updates the sync status and tells the app.
   function setStatus(s, detail = '') {
     status = s;
     onSyncStatus?.(s, detail);
   }
 
+  // Returns the saved server password, if any.
   function password() {
     try {
       return localStorage.getItem(PW_KEY) || '';
@@ -177,6 +184,7 @@ export async function createStore({ onChange, onSyncStatus }) {
     }
   }
 
+  // Sends the logbook to the server (gzipped when large) and returns its merged copy.
   async function api(method, body, query = '') {
     const headers = { 'Content-Type': 'application/json', 'X-Sync-Unchanged': 'empty' };
     const pw = password();
@@ -195,6 +203,8 @@ export async function createStore({ onChange, onSyncStatus }) {
     if (res.status === 401) throw Object.assign(new Error('Password required'), { auth: true });
     // A plain static host (no Node server) answers with a 404/405 page.
     if (!(res.headers.get('content-type') || '').includes('json') && [404, 405, 501].includes(res.status)) throw Object.assign(new Error('No server'), { noServer: true });
+    if (res.status === 413) throw Object.assign(new Error('Logbook too large for the server'), { fatal: true });
+    if (res.status === 429) throw Object.assign(new Error('Too many wrong passwords. Try again in 15 minutes.'), { fatal: true });
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     // 204: the server had nothing newer than what we sent.
     if (res.status === 204) return null;
@@ -211,6 +221,7 @@ export async function createStore({ onChange, onSyncStatus }) {
   }
 
   let inflight = null;
+  let pendingReplace = false; // an import still has to overwrite the server
 
   /** Push local changes and pull the merged copy. Resolves when done. */
   function sync() {
@@ -224,7 +235,10 @@ export async function createStore({ onChange, onSyncStatus }) {
     inflight = (async () => {
       setStatus('syncing');
       try {
-        const remote = await api('PUT', state);
+        // An import that couldn't reach the server yet still replaces its copy.
+        const replacing = pendingReplace;
+        const remote = await api('PUT', state, replacing ? '?mode=replace' : '');
+        if (replacing) pendingReplace = false;
         serverAvailable = true;
         const changed = remote ? absorb(remote) : false;
         setStatus('synced');
@@ -234,6 +248,7 @@ export async function createStore({ onChange, onSyncStatus }) {
           serverAvailable = false;
           setStatus('local', 'No server: data is stored on this device only');
         } else if (err.auth) setStatus('auth', 'Enter your password in Settings to sync');
+        else if (err.fatal) setStatus('error', err.message);
         else setStatus('offline', 'Saved on this device; will sync when online');
       }
     })().finally(() => {
@@ -243,6 +258,7 @@ export async function createStore({ onChange, onSyncStatus }) {
     return inflight;
   }
 
+  // Syncs shortly after the last change, so quick taps become one sync.
   function schedulePush() {
     clearTimeout(pushTimer);
     pushTimer = setTimeout(sync, PUSH_DELAY);
@@ -264,16 +280,22 @@ export async function createStore({ onChange, onSyncStatus }) {
     },
     /** Replace everything (import). With `push`, overwrite the server too. */
     async replace(next) {
+      // Let a sync already under way finish first, so its reply (the server's
+      // old copy) can't be merged back into the import.
+      clearTimeout(pushTimer);
+      if (inflight) await inflight;
       state = normalizeState(next);
       persist();
       onChange?.({ remote: false });
-      if (serverAvailable) {
-        try {
-          await api('PUT', state, '?mode=replace');
-          setStatus('synced');
-        } catch {
-          setStatus('offline', 'Imported on this device; server not updated');
-        }
+      pendingReplace = true;
+      if (serverAvailable === false) return;
+      try {
+        await api('PUT', state, '?mode=replace');
+        pendingReplace = false;
+        serverAvailable = true;
+        setStatus('synced');
+      } catch {
+        setStatus('offline', 'Imported on this device; the server gets it on the next sync');
       }
     },
     /** First full sync; it also tells whether there is a server at all. */
@@ -302,12 +324,13 @@ export async function createStore({ onChange, onSyncStatus }) {
     },
     hasPassword: () => !!password(),
     /** Call another server endpoint (e.g. api/google/status) with the password. */
-    async request(path, { method = 'GET', body } = {}) {
+    async request(path, { method = 'GET', body, keepalive = false } = {}) {
       const headers = { Accept: 'application/json' };
       const pw = password();
       if (pw) headers.Authorization = `Bearer ${pw}`;
       if (body) headers['Content-Type'] = 'application/json';
-      const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+      // keepalive lets a request finish while the page is being hidden or closed.
+      const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store', keepalive });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw Object.assign(new Error(data.error || `Server error ${res.status}`), { status: res.status, data });
       return data;

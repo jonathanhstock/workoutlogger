@@ -15,6 +15,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { applyHealthImport, defaultState, mergeStates, normalizeState, statesEqual } from './public/js/model.js';
 import { createGoogleHealth } from './google-health.js';
+import { createWebPush } from './web-push.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -36,7 +37,8 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-export function createServer({ dataDir = path.join(ROOT, 'data'), password = '', trustProxy = false, google: googleOpts = {} } = {}) {
+// Creates the HTTP server: the app files, the logbook API, Fitbit import and timer alerts.
+export function createServer({ dataDir = path.join(ROOT, 'data'), password = '', trustProxy = false, google: googleOpts = {}, push: pushOpts = {} } = {}) {
   const dbFile = path.join(dataDir, 'logbook.json');
   const backupDir = path.join(dataDir, 'backups');
   fs.mkdirSync(backupDir, { recursive: true });
@@ -46,6 +48,7 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
   let writeChain = Promise.resolve();
   let unsaved = false; // the last write failed; retry on the next sync
 
+  // Keeps a new logbook in memory and writes it (plus a daily backup) to disk.
   function save(next) {
     state = next;
     const json = JSON.stringify(next);
@@ -74,6 +77,31 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
   }
 
   const google = createGoogleHealth({ dataDir, ...googleOpts });
+  const push = createWebPush({ dataDir, ...pushOpts });
+
+  // Answers the timer notification routes: key, subscribe, unsubscribe, schedule, test.
+  async function handlePush(req, res, url) {
+    const route = url.pathname.slice('/api/push/'.length);
+    if (route === 'key' && req.method === 'GET') return sendJson(res, 200, { publicKey: push.publicKey() });
+    if (req.method !== 'POST' && req.method !== 'PUT') return sendJson(res, 405, { error: 'Method not allowed' });
+    let body;
+    try {
+      body = JSON.parse((await readBody(req)) || '{}');
+    } catch {
+      return sendJson(res, 400, { error: 'Invalid JSON' });
+    }
+    if (route === 'subscribe') {
+      push.subscribe(body.subscription);
+      return sendJson(res, 200, { ok: true });
+    }
+    if (route === 'unsubscribe') {
+      push.unsubscribe(String(body.endpoint || ''));
+      return sendJson(res, 200, { ok: true });
+    }
+    if (route === 'schedule') return sendJson(res, 200, { scheduled: push.schedule(body.items) });
+    if (route === 'test') return sendJson(res, 200, await push.sendAll({ title: 'Logbook', body: 'Timer alerts are on. You will get one when rest or an interval ends.', tag: 'test' }));
+    return sendJson(res, 404, { error: 'Not found' });
+  }
 
   /** Pull Fitbit / Google Health data into the logbook. */
   async function importHealth(opts) {
@@ -86,6 +114,7 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
     return changed;
   }
 
+  // Answers the Fitbit routes: status, connect, sync and disconnect.
   async function handleGoogle(req, res, url) {
     const route = url.pathname.slice('/api/google/'.length);
     if (route === 'status' && req.method === 'GET') return sendJson(res, 200, google.status(req));
@@ -112,8 +141,10 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
   // Slow down password guessing: after too many failures from one address,
   // refuse further attempts for a while.
   const failures = new Map(); // ip -> { count, first, until }
+  // Returns the client’s address (from the proxy header on Render).
   const clientIp = (req) => (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
 
+  // Checks the Bearer password against APP_PASSWORD in constant time.
   function authorized(req) {
     if (!password) return true;
     const header = req.headers.authorization || '';
@@ -122,6 +153,7 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
     return crypto.timingSafeEqual(given, expected);
   }
 
+  // Answers every /api/ request: health, Fitbit sign-in, password check, then the routes.
   async function handleApi(req, res, url) {
     if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, auth: !!password });
     // Google sends the browser back here after sign-in. It can't carry the
@@ -149,6 +181,14 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
       return sendJson(res, 401, { error: 'Password required' });
     }
     if (f) failures.delete(ip);
+
+    if (url.pathname.startsWith('/api/push/')) {
+      try {
+        return await handlePush(req, res, url);
+      } catch (err) {
+        return sendJson(res, err.status || 500, { error: err.message });
+      }
+    }
 
     if (url.pathname.startsWith('/api/google/')) {
       try {
@@ -192,6 +232,7 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
   // with a tiny 304 instead of downloading the file again.
   const files = new Map(); // abs path -> Promise<{ type, etag, raw, gzip, br }>
 
+  // Reads an app file once and keeps it in memory, compressed, with an ETag.
   function loadFile(file) {
     if (!files.has(file)) {
       const p = fsp.readFile(file).then((raw) => {
@@ -209,6 +250,7 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
     return files.get(file);
   }
 
+  // Serves an app file, compressed and with a 304 when the phone already has it.
   async function serveStatic(req, res, url) {
     let rel;
     try {
@@ -260,6 +302,7 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
   });
 }
 
+// Reads the logbook from disk, keeping a copy aside if the file is unreadable.
 function loadState(file) {
   try {
     return normalizeState(JSON.parse(fs.readFileSync(file, 'utf8')));
@@ -274,8 +317,10 @@ function loadState(file) {
   }
 }
 
+// Reads a request body (gzipped or not) up to the size limit.
 function readBody(req, gzipped = false) {
   return new Promise((resolve, reject) => {
+    // Builds the error for a body over the size limit.
     const tooLarge = () => Object.assign(new Error('Body too large'), { status: 413 });
     let size = 0;
     const chunks = [];
@@ -299,6 +344,7 @@ function readBody(req, gzipped = false) {
   });
 }
 
+// Picks the best compression the browser accepts (brotli, then gzip).
 function pickEncoding(req) {
   const accept = String(req?.headers['accept-encoding'] || '');
   if (/\bbr\b/.test(accept)) return 'br';
@@ -306,6 +352,7 @@ function pickEncoding(req) {
   return '';
 }
 
+// Sends a JSON reply, gzipped when large and the browser accepts it.
 function sendJson(res, status, body, req) {
   let data = Buffer.from(JSON.stringify(body));
   const headers = { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' };
@@ -320,6 +367,7 @@ function sendJson(res, status, body, req) {
   res.end(data);
 }
 
+// Sends a plain text reply.
 function sendText(res, status, text) {
   res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(text);
@@ -336,6 +384,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       // Render sets RENDER_EXTERNAL_URL to the app's public address.
       publicUrl: process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '',
     },
+    // Push services want a contact for the sender; the app's own address works.
+    push: { subject: process.env.PUSH_SUBJECT || process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || undefined },
     // Hosts like Render put the real client address in X-Forwarded-For.
     trustProxy: process.env.TRUST_PROXY === '1' || !!process.env.RENDER,
   });

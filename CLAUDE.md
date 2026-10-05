@@ -86,6 +86,13 @@ Notes for that migration:
   typed. The API's description document is at
   `https://health.googleapis.com/$discovery/rest?version=v4`, which is useful
   for checking field names.
+- Timer alerts: `web-push.js` sends Web Push (RFC 8291/8292, `node:crypto`
+  only); VAPID keys, subscriptions and pending alerts live in
+  `DATA_DIR/push.json`. The app sends its pending alerts (`pendingAlerts`)
+  only when it goes to the background and cancels them when it comes back,
+  so you never get a notification and an in-app beep together. iPhone has
+  no Vibration API; `vibrate()` in `app.js` falls back to tapping a hidden
+  iOS switch control for a haptic tick.
 - `public/js/model.js` holds all data logic and is shared by the browser, the
   server and the tests. Keep it free of DOM, storage and network code.
 - Never make a page element wider than the screen (iPhone zooms out and gets stuck).

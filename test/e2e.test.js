@@ -23,6 +23,7 @@ let base;
 let browser;
 let clockMinutes = 0;
 
+// Opens the app in a new browser context (phone by default) once it has synced.
 async function openApp(device = PHONE, hash = '#log') {
   const context = await browser.newContext(device);
   const page = await context.newPage();
@@ -43,8 +44,19 @@ async function openApp(device = PHONE, hash = '#log') {
   return { context, page, errors };
 }
 
+/** Waits up to 3 s for a condition checked in the test process. */
+async function expectSoon(check) {
+  for (let i = 0; i < 60; i++) {
+    if (check()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.fail('condition never became true');
+}
+
+// Finds the Log card for an exercise by its name.
 const card = (page, name) => page.locator('article.entry', { has: page.locator('h3', { hasText: name }) }).first();
 
+// Reads the logbook straight from the test server.
 async function serverState() {
   return (await fetch(`${base}/api/state`)).json();
 }
@@ -65,12 +77,15 @@ async function serverHas(page, check) {
   assert.fail(`server never reached expected state: ${JSON.stringify(s.sessions?.[TODAY]).slice(0, 400)}`);
 }
 
+// Finds today’s entry for an exercise in a logbook.
 const todayEntry = (s, id) => s.sessions[TODAY].entries.find((e) => e.exerciseId === id);
 
+// Saves a screenshot when SCREENSHOTS is set.
 async function shot(page, name) {
   if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
 }
 
+// Fails if the page scrolls sideways (it would make iPhone zoom out).
 async function noHorizontalScroll(page) {
   const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   assert.ok(sw <= cw, `page scrolls horizontally: ${sw} > ${cw}`);
@@ -120,6 +135,7 @@ describe('workout logbook in the browser', () => {
     assert.equal(await page.locator('select[data-field="plan-day"]').inputValue(), '0');
     await page.locator('.day-note', { hasText: 'rotator cuffs' }).waitFor();
 
+    // Finds the flat press card.
     const flat = () => card(page, FLAT);
     // Pre-filled from the previous rotation's 185 lb, with the intensity tracker comparing.
     assert.equal(await flat().locator('.set-row input').first().inputValue(), '185');
@@ -161,6 +177,7 @@ describe('workout logbook in the browser', () => {
     await flat().locator('.rpe-row').getByText('last 8').waitFor();
     await flat().locator('.rpe button', { hasText: '9' }).click();
 
+    // Returns weight and reps of the first two flat press sets.
     const sets = (s) => todayEntry(s, 'flat-press').sets.slice(0, 2).map((x) => [x.weight, x.reps, x.done]);
     await serverHas(page, (s) => JSON.stringify(sets(s)) === JSON.stringify([[185, 10, true], [190, 9, true]]) && todayEntry(s, 'flat-press').rpe === 9);
 
@@ -171,6 +188,7 @@ describe('workout logbook in the browser', () => {
 
   test('targets can be changed for this rotation only', async () => {
     const { context, page, errors } = await openApp();
+    // Finds the flat press card.
     const flat = () => card(page, FLAT);
     await flat().getByRole('button', { name: 'Edit target' }).click();
     await flat().locator('.target-edit').getByRole('button', { name: 'Increase Sets' }).click();
@@ -194,6 +212,7 @@ describe('workout logbook in the browser', () => {
 
   test('warm-up sets, set types and swapping exercises', async () => {
     const { context, page, errors } = await openApp();
+    // Finds the triceps pushdown card.
     const push = () => card(page, 'Triceps Pushdown');
     await push().locator('.set-row.t-warmup .idx', { hasText: 'W' }).waitFor();
     await push().locator('.set-legend').waitFor();
@@ -225,6 +244,7 @@ describe('workout logbook in the browser', () => {
   test('cardio, vacuum timer, body weight and adding exercises', async () => {
     const { context, page, errors } = await openApp();
 
+    // Finds the incline treadmill walk card.
     const walk = () => card(page, 'Incline Treadmill Walk');
     await walk().locator('.cue', { hasText: 'Incline 12 · 3.0 mph' }).waitFor();
     assert.equal(await walk().getByRole('textbox', { name: 'Incline', exact: true }).inputValue(), '12');
@@ -274,7 +294,9 @@ describe('workout logbook in the browser', () => {
 
   test('supersets skip rest between the pair; cardio can be swapped', async () => {
     const { context, page, errors } = await openApp();
+    // Finds the incline dumbbell press card.
     const press = () => card(page, 'Incline Dumbbell Press');
+    // Finds the incline dumbbell fly card.
     const fly = () => card(page, 'Incline Dumbbell Fly');
     await press().locator('.badge.ss').waitFor();
     await page.locator('.ss-link', { hasText: 'no rest between' }).first().waitFor();
@@ -527,9 +549,66 @@ describe('workout logbook in the browser', () => {
     await fit.locator('.stat', { hasText: '7h 32m' }).waitFor();
     await fit.locator('li', { hasText: 'Weights' }).waitFor();
     await noHorizontalScroll(page);
+    // Fitbit data is kept on the phone too: it's still there offline after a reload.
+    await page.waitForTimeout(100);
+    await context.setOffline(true);
+    await page.reload();
+    await fit.locator('.stat', { hasText: '10,234' }).waitFor();
+    await context.setOffline(false);
+    await page.waitForSelector('#sync[data-status="synced"]');
+
+    // A decimal comma works in number boxes ("180,4" is 180.4 lb).
+    if (!(await page.locator('.bw input').count())) await page.getByRole('button', { name: 'Log weight' }).click();
+    await page.locator('.bw input').fill('180,4');
+    await page.locator('.bw input').press('Tab');
+    await page.waitForFunction((d) => window.logbook.store.state.body[d]?.weight === 180.4, TODAY);
+
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.locator('#google-card', { hasText: 'GOOGLE_CLIENT_ID' }).waitFor();
     await page.locator('#google-card code', { hasText: '/api/google/callback' }).waitFor();
+    await noHorizontalScroll(page);
+    // The offline reload logs failed requests; anything else is a real error.
+    assert.deepEqual(errors.filter((e) => !e.includes('ERR_INTERNET_DISCONNECTED')), []);
+    await context.close();
+  });
+
+  test('timer alerts are scheduled while the app is hidden and cancelled when it returns', async () => {
+    const { context, page, errors } = await openApp();
+    // Headless Chromium always reports notifications as denied; stand in for "Allow".
+    await page.addInitScript(() => Object.defineProperty(Notification, 'permission', { configurable: true, get: () => 'granted' }));
+    await page.evaluate(() => localStorage.setItem('workout-logbook:alerts', '1'));
+    await page.reload();
+    await page.waitForSelector('#sync[data-status="synced"]');
+    assert.equal(await page.evaluate(() => Notification.permission), 'granted');
+    const scheduled = [];
+    await page.route('**/api/push/schedule', async (r) => {
+      scheduled.push(JSON.parse(r.request().postData()).items);
+      await r.fulfill({ status: 200, contentType: 'application/json', body: '{"scheduled":0}' });
+    });
+    // Pretends the phone was locked or the app switched away (or back).
+    const setHidden = (hidden) =>
+      page.evaluate((hidden) => {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (hidden ? 'hidden' : 'visible') });
+        document.dispatchEvent(new Event('visibilitychange'));
+      }, hidden);
+
+    await card(page, FLAT).getByRole('button', { name: /Complete next set/ }).click();
+    await page.locator('#rest [data-rest-time]').waitFor();
+    const restEnds = await page.evaluate(() => JSON.parse(localStorage.getItem('workout-logbook:rest')).endsAt);
+    await setHidden(true);
+    await expectSoon(() => scheduled.length === 1);
+    assert.equal(scheduled[0].length, 1);
+    assert.equal(scheduled[0][0].title, 'Rest over');
+    assert.equal(scheduled[0][0].at, restEnds);
+    assert.match(scheduled[0][0].body, /Flat/);
+    await setHidden(false);
+    await expectSoon(() => scheduled.length === 2);
+    assert.deepEqual(scheduled[1], []);
+
+    // Settings shows alerts as on for this device.
+    await page.getByRole('button', { name: 'Skip' }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.locator('#alerts-card', { hasText: 'On for this device' }).waitFor();
     await noHorizontalScroll(page);
     assert.deepEqual(errors, []);
     await context.close();
@@ -540,7 +619,9 @@ describe('workout logbook in the browser', () => {
     // A short pull does nothing; a long one syncs.
     const drag = (dy) =>
       page.evaluate((dy) => {
+        // Builds a touch point at a height on the page.
         const t = (y) => new Touch({ identifier: 1, target: document.body, clientX: 180, clientY: y });
+        // Sends a touch event to the page.
         const fire = (type, y) => document.dispatchEvent(new TouchEvent(type, { touches: type === 'touchend' ? [] : [t(y)], changedTouches: [t(y)], bubbles: true }));
         fire('touchstart', 120);
         for (let y = 120; y <= 120 + dy; y += 20) fire('touchmove', y);
