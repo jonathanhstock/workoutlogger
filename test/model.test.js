@@ -350,6 +350,20 @@ describe('cardio options and supersets', () => {
     assert.deepEqual([fasted.incline, fasted.speed], [12, 3]);
   });
 
+  test('HIIT treadmill and elliptical log intervals', () => {
+    const s = fresh();
+    const tread = M.makeEntry(s, 'hiit-treadmill');
+    assert.deepEqual([tread.cardio.rounds, tread.cardio.incline, tread.cardio.minutes], [6, 7, 25]);
+    assert.deepEqual(M.cardioFields(s, 'hiit-treadmill'), ['rounds', 'speed', 'incline']);
+    const ell = M.makeEntry(s, 'hiit-elliptical');
+    assert.deepEqual([ell.cardio.rounds, ell.cardio.level], [6, 12]);
+    ell.cardio.done = true;
+    assert.equal(M.entryMetrics(ell).rounds, 6);
+    // Custom cardio doesn't get an intervals field unless asked for.
+    const id = M.addExercise(s, { name: 'Rower', kind: 'cardio' });
+    assert.deepEqual(M.cardioFields(s, id), ['speed', 'incline', 'level']);
+  });
+
   test('distance is estimated from speed when not entered', () => {
     const e = { kind: 'cardio', cardio: { minutes: 40, speed: 3, distance: 0, done: true } };
     assert.equal(M.entryMetrics(e).distance, 2);

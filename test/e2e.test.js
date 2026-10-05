@@ -296,6 +296,17 @@ describe('workout logbook in the browser', () => {
     assert.equal(await stairs.getByRole('textbox', { name: 'Level', exact: true }).inputValue(), '8');
     assert.equal(await stairs.getByRole('textbox', { name: 'Speed (mph)', exact: true }).count(), 0);
     await stairs.getByRole('button', { name: 'Increase Level' }).click();
+    // HIIT options are in the cardio swap list and log intervals.
+    await stairs.getByRole('button', { name: /Swap Stairmaster/ }).click();
+    await page.locator('.pick', { hasText: 'HIIT Elliptical' }).click();
+    const hiit = card(page, 'HIIT Elliptical');
+    await hiit.locator('.cue', { hasText: 'Level 12–15' }).waitFor();
+    assert.equal(await hiit.getByRole('textbox', { name: 'Intervals', exact: true }).inputValue(), '6');
+    await hiit.getByRole('button', { name: 'Increase Intervals' }).click();
+    await serverHas(page, (s) => todayEntry(s, 'hiit-elliptical')?.cardio.rounds === 7);
+    await hiit.getByRole('button', { name: /Swap HIIT Elliptical/ }).click();
+    await page.locator('.pick', { hasText: 'Stairmaster' }).click();
+    await card(page, 'Stairmaster').getByRole('button', { name: 'Increase Level' }).click();
     // Metric is available in Settings; US units are the default.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'lb', exact: true }).waitFor();

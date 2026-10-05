@@ -88,13 +88,14 @@ const CARDIO_LABEL = {
   },
   incline: 'Incline',
   level: 'Level',
+  rounds: 'Intervals',
 };
 
 const range = (lo, hi) => (hi && hi > lo ? `${fmt(lo)}–${fmt(hi)}` : fmt(lo));
 
 /** Cardio settings as text, e.g. "incline 12 · 3 mph" or "level 8". */
 function cardioSettingsText(c) {
-  return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} ${speedUnit()}` : '', c.level ? `level ${fmt(c.level)}` : ''].filter(Boolean).join(' · ');
+  return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} ${speedUnit()}` : '', c.level ? `level ${fmt(c.level)}` : '', c.rounds ? `${fmt(c.rounds)} intervals` : ''].filter(Boolean).join(' · ');
 }
 
 function targetText(t, kind) {
@@ -172,11 +173,12 @@ const STEP = {
   speed: () => 0.1,
   incline: () => 0.5,
   level: () => 1,
+  rounds: () => 1,
   calories: () => 10,
   avgHr: () => 1,
 };
-const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level']);
-const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260, speed: 30, incline: 40, level: 30 };
+const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level', 'rounds']);
+const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260, speed: 30, incline: 40, level: 30, rounds: 50 };
 
 function cleanValue(key, v) {
   v = Math.max(0, Math.min(MAX[key] ?? 100000, Number(v) || 0));
@@ -983,6 +985,7 @@ const EX_METRICS = {
     ['speed', 'Speed', (m) => m.speed],
     ['incline', 'Incline', (m) => m.incline],
     ['level', 'Level', (m) => m.level],
+    ['rounds', 'Intervals', (m) => m.rounds],
   ],
   vacuum: HOLD_METRICS,
   timed: HOLD_METRICS,
@@ -996,6 +999,7 @@ function metricFormatter(kind, key) {
   if (key === 'minutes') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} min`);
   if (key === 'speed') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} ${speedUnit()}`);
   if (key === 'incline') return (v, axis) => (axis ? fmt(v) : `incline ${fmt(v)}`);
+  if (key === 'rounds') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} intervals`);
   if (key === 'level') return (v, axis) => (axis ? fmt(v) : `level ${fmt(v)}`);
   return (v) => fmt(v);
 }
