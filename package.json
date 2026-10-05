@@ -1,0 +1,19 @@
+{
+  "name": "workout-logbook",
+  "version": "1.0.0",
+  "description": "A simple, robust workout logbook for strength, cardio and stomach vacuum sessions.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test test/model.test.js test/server.test.js",
+    "test:e2e": "node --test test/e2e.test.js",
+    "test:all": "node --test test/"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

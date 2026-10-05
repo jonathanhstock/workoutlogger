@@ -1,0 +1,23 @@
+# One-click deploy on Render: New → Blueprint → pick this repository.
+# A persistent disk keeps your logbook across restarts and deploys
+# (disks need a paid instance type; free instances lose their files).
+services:
+  - type: web
+    name: workout-logbook
+    runtime: node
+    plan: starter
+    buildCommand: npm install --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATA_DIR
+        value: /var/data
+      - key: APP_PASSWORD
+        sync: false # Render asks you for this when you create the service
+    disk:
+      name: logbook-data
+      mountPath: /var/data
+      sizeGB: 1
