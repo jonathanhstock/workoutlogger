@@ -9,7 +9,8 @@ This file holds notes, conventions and ideas for future updates, not only rules.
 
 - `npm test` – unit + server tests (run before every push)
 - `npm run test:e2e` – Playwright browser tests (phone + desktop viewports)
-- `npm run check-videos` – verifies every YouTube link (needs internet; runs in CI)
+- `npm run check-videos` – verifies every YouTube link (needs internet; runs in CI
+  when `program.js` changes, and weekly)
 
 ## Git and pull requests
 
@@ -64,7 +65,8 @@ Notes for that migration:
 - Form videos live in `VIDEOS` / `WORKOUT_VIDEOS` in `program.js` and play in
   the app (YouTube privacy-enhanced embed; video data streams from YouTube, not
   Render). Every exercise has one. Every link is checked against YouTube oEmbed
-  by `npm run check-videos` (the `videos` CI job); add new links there and make
+  by `npm run check-videos` (the `videos` workflow, which runs when `program.js`
+  changes and every Monday); add new links there and make
   sure that job passes.
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
   timer between linked exercises; rest after the last one in the group.

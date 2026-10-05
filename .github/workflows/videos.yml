@@ -1,0 +1,31 @@
+name: videos
+# Verifies every exercise / workout video link still exists and can be
+# embedded (YouTube oEmbed). Runs here because it needs internet access.
+# It runs when the video list changes, and weekly to catch videos that
+# were deleted or made private on YouTube. It can also be run by hand
+# from the Actions tab.
+on:
+  push:
+    branches: [main]
+    paths:
+      - public/js/program.js
+      - scripts/check-videos.mjs
+      - .github/workflows/videos.yml
+  pull_request:
+    paths:
+      - public/js/program.js
+      - scripts/check-videos.mjs
+      - .github/workflows/videos.yml
+  schedule:
+    - cron: '23 14 * * 1' # Mondays, 14:23 UTC
+  workflow_dispatch:
+jobs:
+  videos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run check-videos
