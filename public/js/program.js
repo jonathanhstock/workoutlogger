@@ -111,7 +111,7 @@ const hold = (exerciseId, sets, holdSec, x = {}) => ({
 
 const warmupBike = cardio('bike', 5, 'Warm-up: 5–10 min on the bike or treadmill');
 const fastedCardio = cardio('incline-walk', 30, 'Fasted · 3 mph · incline 12 · 30–45 min');
-const vacuums = hold('vacuum', 5, 10, { setsMax: 8, rest: 20, note: 'Daily: 5–8 holds of 10 seconds' });
+const vacuums = hold('vacuum', 5, 10, { setsMax: 8, note: 'Daily: 5–8 holds of 10 seconds' });
 const coreCircuit = [
   s('hanging-leg-raise', 3, 15, { setsMax: 4, repsMax: 20, rest: 30, note: 'Core circuit: pick 3–4 exercises, swap any you like' }),
   s('russian-twist', 3, 15, { setsMax: 4, repsMax: 20, rest: 30 }),

@@ -39,3 +39,7 @@ server-side storage, migrate to Postgres instead:
   server and the tests. Keep it free of DOM, storage and network code.
 - Never make a page element wider than the screen (iPhone zooms out and gets stuck).
   The e2e suite checks this at 320 px and 390 px.
+- Pinch and double-tap zoom are disabled on phones on purpose (app-like feel):
+  viewport `maximum-scale=1, user-scalable=no`, `touch-action: manipulation`,
+  and iOS gesture events cancelled in `app.js`. Keep inputs at 16px+ so iOS
+  doesn't auto-zoom on focus.

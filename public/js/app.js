@@ -487,7 +487,8 @@ function updateRestBar() {
 /** Start the rest timer after finishing a set, if enabled. */
 function restAfter(entry) {
   const st = S().settings;
-  if (!st.autoRest || entry.kind === 'cardio') return;
+  // Cardio and stomach vacuums don't use rest periods.
+  if (!st.autoRest || entry.kind === 'cardio' || entry.kind === 'vacuum') return;
   const sec = entry.target.restSec || st.restSec;
   const name = M.exerciseName(S(), entry.exerciseId);
   const left = entry.sets.filter((s) => !s.done).length;
@@ -643,10 +644,10 @@ function entryCard(e, index, count) {
   const allDone = M.entryComplete(e);
   const body = e.kind === 'cardio' ? cardioBody(e) : setsBody(e, prev);
 
-  return `<article class="card entry${allDone ? ' is-done' : ''}${e.target.optional && !M.entryHasWork(e) ? ' is-optional' : ''}" data-entry-id="${e.id}">
+  return `<article class="card entry${allDone ? ' is-done' : ''}${e.target.optional ? ' is-optional' : ''}" data-entry-id="${e.id}">
     <div class="entry-head">
       <div class="entry-title">
-        <h3>${esc(name)} <span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${e.target.optional ? '<span class="badge opt">Optional</span>' : ''}</h3>
+        <h3>${esc(name)} <span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${e.target.optional ? '<span class="badge opt" title="Optional – skip it if you like">Optional</span>' : ''}</h3>
         <div class="target-line"><span>Target <b>${targetText(e.target, e.kind)}</b></span>
           <button type="button" class="link-btn" data-action="toggle-target" data-entry="${e.id}" aria-expanded="${editing}">${editing ? 'Done' : 'Edit target'}</button></div>
         ${e.target.note ? `<div class="cue">${esc(e.target.note)}</div>` : ''}
@@ -671,6 +672,7 @@ function entryCard(e, index, count) {
 }
 
 function rpeRow(e, prev) {
+  if (e.kind === 'vacuum') return ''; // no effort rating for vacuums
   if (e.kind === 'cardio' && !e.cardio.done && !e.rpe) return '';
   const chips = [5, 6, 7, 8, 9, 10].map((v) => `<button type="button" data-action="rpe" data-entry="${e.id}" data-value="${v}" aria-pressed="${e.rpe === v}">${v}</button>`).join('');
   return `<div class="rpe-row"><span class="label" title="Rate of perceived exertion: 10 = maximum effort, nothing left">RPE</span>
@@ -685,7 +687,10 @@ function targetEditor(e, prev) {
   if (e.kind === 'cardio') {
     fields = `<div class="grid2">${st('minutes', 'Minutes')}${st('distance', `Distance (${dunit()})`)}</div>`;
   } else if (M.isHold(e.kind)) {
-    fields = `<div class="grid3">${st('sets', 'Sets')}${st('holdSec', 'Hold (sec)')}${st('restSec', 'Rest (sec)')}</div>`;
+    fields =
+      e.kind === 'vacuum'
+        ? `<div class="grid2">${st('sets', 'Sets')}${st('holdSec', 'Hold (sec)')}</div>`
+        : `<div class="grid3">${st('sets', 'Sets')}${st('holdSec', 'Hold (sec)')}${st('restSec', 'Rest (sec)')}</div>`;
   } else {
     fields = `<div class="grid3">${st('sets', 'Sets')}${st('reps', 'Reps')}${st('weight', unit())}</div>
       <div class="grid3">${st('warmupSets', 'Warm-ups')}${st('dropSets', 'Drop sets')}${st('restSec', 'Rest (sec)')}</div>`;
@@ -761,7 +766,7 @@ function setsBody(e, prev) {
       const p = prevByType(type)[counters[type] - 1];
       const bits = [];
       if (p) bits.push(`Last: ${hold ? fmtSec(p.holdSec) : `${fmt(p.weight)} × ${fmt(p.reps)}`}`);
-      if (rested[s.id]) bits.push(`rested ${fmtClock(rested[s.id])}`);
+      if (rested[s.id] && e.kind !== 'vacuum') bits.push(`rested ${fmtClock(rested[s.id])}`);
       const hint = bits.length ? `<div class="prev-hint">${bits.join(' · ')}</div>` : '';
       const check = `<button type="button" class="check" data-action="toggle-set" data-entry="${e.id}" data-set="${s.id}" aria-pressed="${s.done}" aria-label="Set ${i + 1} done">${ICON.check}</button>`;
       if (hold) {
@@ -812,7 +817,7 @@ function planItemHTML(state, wd, it, i, n) {
     grid = `<div class="grid2">${st('minutes', 'Minutes')}${st('distance', dunit())}</div>`;
   } else if (M.isHold(kind)) {
     grid = `<div class="grid3">${st('sets', 'Sets')}${st('setsMax', 'Up to')}${st('holdSec', 'Hold sec')}</div>`;
-    if (open) more = `<div class="grid3">${st('restSec', 'Rest (0=default)')}</div>`;
+    if (open && kind !== 'vacuum') more = `<div class="grid3">${st('restSec', 'Rest (0=default)')}</div>`;
   } else {
     grid = it.repScheme
       ? `<div class="grid2"><label class="field"><span>Reps per set</span><input data-field="plan-scheme" data-wd="${wd}" data-item="${esc(it.id)}" value="${esc(it.repScheme.join(' '))}" inputmode="numeric" aria-label="Reps per set"></label>${st('weight', `${unit()} (0 = last)`)}</div>`
@@ -827,13 +832,13 @@ function planItemHTML(state, wd, it, i, n) {
     more += `<label class="field"><span>Note / cue</span><input data-field="plan-note" data-wd="${wd}" data-item="${esc(it.id)}" value="${esc(it.note || '')}" maxlength="300" placeholder="e.g. superset with flyes, 2-sec squeeze"></label>
       <button type="button" class="btn sm" data-action="plan-optional" data-wd="${wd}" data-item="${esc(it.id)}" aria-pressed="${!!it.optional}">${it.optional ? '✓ Optional' : 'Mark as optional'}</button>`;
   }
-  return `<div class="planitem">
-    <div class="planitem-top"><span class="name">${esc(ex.name)}</span>${it.optional ? '<span class="badge opt">Optional</span>' : ''}
+  return `<div class="planitem${it.optional ? ' is-optional' : ''}">
+    <div class="planitem-top"><span class="name">${esc(ex.name)}</span>${it.optional ? '<span class="badge opt" title="Optional – skip it if you like">Optional</span>' : ''}
       <button type="button" class="icon-btn" data-action="plan-swap" data-wd="${wd}" data-item="${it.id}" aria-label="Swap ${esc(ex.name)}" title="Swap exercise">${ICON.swap}</button>
       <button type="button" class="icon-btn" data-action="plan-move" data-wd="${wd}" data-item="${it.id}" data-dir="-1" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>${ICON.up}</button>
       <button type="button" class="icon-btn" data-action="plan-move" data-wd="${wd}" data-item="${it.id}" data-dir="1" aria-label="Move down" ${i === n - 1 ? 'disabled' : ''}>${ICON.down}</button>
       <button type="button" class="icon-btn" data-action="plan-remove" data-wd="${wd}" data-item="${it.id}" aria-label="Remove ${esc(ex.name)}">${ICON.trash}</button></div>
-    <div class="small muted">${targetText(it, kind)}${it.restSec ? ` · rest ${fmtSec(it.restSec)}` : ''}${it.note && !open ? ` · ${esc(it.note)}` : ''}</div>
+    <div class="small muted">${targetText(it, kind)}${it.restSec && kind !== 'vacuum' ? ` · rest ${fmtSec(it.restSec)}` : ''}${it.note && !open ? ` · ${esc(it.note)}` : ''}</div>
     ${grid}${more}
     <button type="button" class="link-btn" data-action="plan-more" data-item="${it.id}" aria-expanded="${open}">${open ? 'Fewer options' : 'More options (ranges, warm-ups, drop sets, rest, notes)'}</button>
   </div>`;
@@ -1567,8 +1572,13 @@ const ACTIONS = {
   'set-weekstart': (el) => updateSettings({ weekStart: Number(el.dataset.value) }),
   'set-autorest': (el) => updateSettings({ autoRest: el.dataset.value === 'true' }),
   'set-restsound': (el) => updateSettings({ restSound: el.dataset.value === 'true' }),
-  'sync-now'() {
-    store.sync();
+  'sync-now': () => syncNow(),
+  'go-home'() {
+    closeSheet();
+    ui.tab = 'log';
+    history.replaceState(null, '', '#log');
+    goDate(M.todayISO());
+    window.scrollTo(0, 0);
   },
   'export-json'() {
     download(`logbook-backup-${M.todayISO()}.json`, JSON.stringify(S(), null, 2), 'application/json');
@@ -1827,6 +1837,96 @@ window.addEventListener('hashchange', () => {
   if (TABS.includes(t) && t !== ui.tab) {
     ui.tab = t;
     render();
+  }
+});
+
+// Behave like a native app on phones: no pinch zoom. iOS Safari ignores
+// user-scalable=no in browser tabs, so also cancel its pinch gestures and
+// multi-finger moves. Desktop browser zoom (Ctrl/Cmd +/−) is unaffected.
+for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+  document.addEventListener(type, (ev) => ev.preventDefault(), { passive: false });
+}
+document.addEventListener(
+  'touchmove',
+  (ev) => {
+    if (ev.touches.length > 1 || (ev.scale && ev.scale !== 1)) ev.preventDefault();
+  },
+  { passive: false },
+);
+
+// ---------------------------------------------------------------------------
+// Manual sync (Synced button and pull-to-sync)
+// ---------------------------------------------------------------------------
+
+let manualSync = null;
+function syncNow() {
+  if (manualSync) return manualSync;
+  manualSync = store.syncNow().then(() => {
+    manualSync = null;
+    const msg = { synced: 'Synced', offline: "Couldn't reach the server. Saved on this device.", auth: 'Enter your password in Settings to sync', local: 'No server: data is saved on this device only' }[store.status];
+    if (msg) toast(msg);
+  });
+  return manualSync;
+}
+
+// Pull down from the top of the page to sync, like a native app.
+const $ptr = document.getElementById('ptr');
+const PULL_TRIGGER = 70; // px of (damped) pull needed to sync
+let pull = null;
+
+function showPull(dist, state) {
+  $ptr.classList.toggle('is-ready', state === 'ready');
+  $ptr.classList.toggle('is-syncing', state === 'syncing');
+  $ptr.querySelector('.ptr-text').textContent = state === 'syncing' ? 'Syncing…' : state === 'ready' ? 'Release to sync' : 'Pull to sync';
+  $ptr.querySelector('.ptr-icon').style.transform = state === 'syncing' ? '' : `rotate(${dist * 3}deg)`;
+  $ptr.style.opacity = String(Math.min(1, dist / 40));
+  $ptr.style.transform = `translate(-50%, ${Math.min(dist, 90) - 80}px)`;
+}
+
+function hidePull() {
+  $ptr.classList.add('is-animating');
+  showPull(0, '');
+  setTimeout(() => $ptr.classList.remove('is-animating'), 220);
+}
+
+document.addEventListener(
+  'touchstart',
+  (ev) => {
+    if (ev.touches.length !== 1 || window.scrollY > 0 || ui.sheet || manualSync) return;
+    pull = { y0: ev.touches[0].clientY, dist: 0 };
+    $ptr.classList.remove('is-animating');
+  },
+  { passive: true },
+);
+document.addEventListener(
+  'touchmove',
+  (ev) => {
+    if (!pull) return;
+    if (ev.touches.length !== 1 || window.scrollY > 0) {
+      pull = null;
+      hidePull();
+      return;
+    }
+    // Damped so it feels like a rubber band.
+    pull.dist = Math.max(0, (ev.touches[0].clientY - pull.y0) * 0.5);
+    showPull(pull.dist, pull.dist >= PULL_TRIGGER ? 'ready' : '');
+  },
+  { passive: true },
+);
+document.addEventListener('touchend', () => {
+  if (!pull) return;
+  const go = pull.dist >= PULL_TRIGGER;
+  pull = null;
+  if (!go) return hidePull();
+  $ptr.classList.add('is-animating');
+  showPull(PULL_TRIGGER, 'syncing');
+  vibrate(10);
+  syncNow().finally(hidePull);
+});
+document.addEventListener('touchcancel', () => {
+  if (pull) {
+    pull = null;
+    hidePull();
   }
 });
 

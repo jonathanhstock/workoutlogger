@@ -13,7 +13,6 @@ const PUSH_DELAY = 700;
 export function createStore({ onChange, onSyncStatus }) {
   let state = load();
   let pushTimer = null;
-  let pushing = false;
   let dirty = false;
   let serverAvailable = null; // null = unknown
   let status = 'local';
@@ -71,28 +70,34 @@ export function createStore({ onChange, onSyncStatus }) {
     return true;
   }
 
-  async function sync() {
-    if (serverAvailable === false) return;
-    if (pushing) {
+  let inflight = null;
+
+  /** Push local changes and pull the merged copy. Resolves when done. */
+  function sync() {
+    if (serverAvailable === false) return Promise.resolve();
+    if (inflight) {
+      // Already syncing: run once more afterwards so nothing is missed.
       dirty = true;
-      return;
+      return inflight;
     }
-    pushing = true;
     dirty = false;
-    setStatus('syncing');
-    try {
-      const remote = await api('PUT', state);
-      serverAvailable = true;
-      const changed = absorb(remote);
-      setStatus('synced');
-      if (changed) onChange?.({ remote: true });
-    } catch (err) {
-      if (err.auth) setStatus('auth', 'Enter your password in Settings to sync');
-      else setStatus('offline', 'Saved on this device; will sync when online');
-    } finally {
-      pushing = false;
+    inflight = (async () => {
+      setStatus('syncing');
+      try {
+        const remote = await api('PUT', state);
+        serverAvailable = true;
+        const changed = absorb(remote);
+        setStatus('synced');
+        if (changed) onChange?.({ remote: true });
+      } catch (err) {
+        if (err.auth) setStatus('auth', 'Enter your password in Settings to sync');
+        else setStatus('offline', 'Saved on this device; will sync when online');
+      }
+    })().finally(() => {
+      inflight = null;
       if (dirty) schedulePush();
-    }
+    });
+    return inflight;
   }
 
   function schedulePush() {
@@ -145,6 +150,15 @@ export function createStore({ onChange, onSyncStatus }) {
       await sync();
     },
     sync,
+    /** A sync the user asked for: also retries a server that seemed absent. */
+    syncNow() {
+      clearTimeout(pushTimer);
+      if (serverAvailable === false) {
+        serverAvailable = null;
+        return this.init();
+      }
+      return sync();
+    },
     setPassword(pw) {
       try {
         if (pw) localStorage.setItem(PW_KEY, pw);

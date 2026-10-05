@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Workout Logbook</title>
   <meta name="description" content="Track every set, rep and weight, plus cardio and stomach vacuum sessions.">
   <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
@@ -18,14 +18,16 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
+    <button class="brand" type="button" data-action="go-home" aria-label="Logbook: go to today's log">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10h2v4H3zM19 10h2v4h-2zM6 7h2v10H6zM16 7h2v10h-2zM8 11h8v2H8z" fill="currentColor"/></svg>
       <span>Logbook</span>
-    </div>
+    </button>
     <button class="sync" id="sync" type="button" data-action="sync-now" title="Sync status">
       <i class="dot"></i><span id="sync-label">Local</span>
     </button>
   </header>
+
+  <div id="ptr" class="ptr" aria-hidden="true"><span class="ptr-icon"><svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z" fill="currentColor"/></svg></span><span class="ptr-text">Pull to sync</span></div>
 
   <nav class="tabbar" aria-label="Sections">
     <button type="button" data-action="tab" data-tab="log">
