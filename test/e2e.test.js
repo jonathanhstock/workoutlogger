@@ -10,9 +10,10 @@ import { chromium } from 'playwright';
 import { createServer } from '../server.js';
 import { defaultState } from '../public/js/model.js';
 
-const TODAY = '2026-10-05'; // Monday ("Push" in the default plan)
-const LAST_WEEK = '2026-09-28';
+const TODAY = '2026-10-05'; // rotation Day 1: Chest & Triceps
+const LAST_ROTATION = '2026-09-27'; // the previous Day 1
 const SHOTS = process.env.SCREENSHOTS;
+const FLAT = 'Flat / Decline Chest Press';
 
 const PHONE = { viewport: { width: 375, height: 812 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
 const DESKTOP = { viewport: { width: 1280, height: 900 } };
@@ -60,6 +61,8 @@ async function serverHas(page, check) {
   assert.fail(`server never reached expected state: ${JSON.stringify(s.sessions?.[TODAY]).slice(0, 400)}`);
 }
 
+const todayEntry = (s, id) => s.sessions[TODAY].entries.find((e) => e.exerciseId === id);
+
 async function shot(page, name) {
   if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
 }
@@ -73,22 +76,25 @@ describe('workout logbook in the browser', () => {
   before(async () => {
     if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'logbook-e2e-'));
-    // Seed last week's bench session so the intensity tracker has history.
+    // Seed the previous Day 1 so the intensity tracker has history.
     const seed = defaultState(1);
-    seed.sessions[LAST_WEEK] = {
-      date: LAST_WEEK,
-      name: 'Push',
+    seed.settings.cycleStart = TODAY;
+    seed.sessions[LAST_ROTATION] = {
+      date: LAST_ROTATION,
+      name: 'Chest & Triceps',
       dayType: 'training',
+      note: '',
       notes: '',
       updatedAt: 1,
       entries: [
         {
           id: 'e1',
-          exerciseId: 'bench',
+          exerciseId: 'flat-press',
           kind: 'strength',
           notes: '',
-          target: { sets: 3, reps: 8, weight: 0 },
-          sets: [1, 2, 3].map((i) => ({ id: `s${i}`, weight: 185, reps: 8, done: true })),
+          rpe: 8,
+          target: { sets: 4, reps: 10, repsMax: 12, weight: 0 },
+          sets: [1, 2, 3, 4].map((i) => ({ id: `s${i}`, weight: 185, reps: 10, done: true })),
         },
       ],
     };
@@ -104,141 +110,203 @@ describe('workout logbook in the browser', () => {
     server?.close();
   });
 
-  test('logs sets with +/- controls, steppers and typing', async () => {
+  test('logs sets with +/- controls and starts the rest timer', async () => {
     const { context, page, errors } = await openApp();
-    await page.getByText('Monday', { exact: false }).first().waitFor();
-    assert.equal(await page.locator('.dayname').inputValue(), 'Push');
+    assert.equal(await page.locator('.dayname').inputValue(), 'Chest & Triceps');
+    assert.equal(await page.locator('select[data-field="plan-day"]').inputValue(), '0');
+    await page.locator('.day-note', { hasText: 'rotator cuffs' }).waitFor();
 
-    const bench = card(page, 'Bench Press');
-    // Pre-filled from last week's 185 lb, with the intensity tracker comparing.
-    assert.equal(await bench.locator('.set-row input').first().inputValue(), '185');
-    await bench.locator('.intensity').getByText('Last · Sep 28').waitFor();
+    const flat = () => card(page, FLAT);
+    // Pre-filled from the previous rotation's 185 lb, with the intensity tracker comparing.
+    assert.equal(await flat().locator('.set-row input').first().inputValue(), '185');
+    await flat().locator('.intensity').getByText('Last · Sep 27').waitFor();
+    await flat().locator('.target-line', { hasText: '4 × 10–12 @ 185 lb' }).waitFor();
     await shot(page, '01-log-phone');
 
-    // "+" completes the next set, "−" undoes it.
-    await bench.getByRole('button', { name: /Complete next set/ }).click();
-    await bench.locator('.count', { hasText: '1/4' }).waitFor();
-    await bench.getByRole('button', { name: /Complete next set/ }).click();
-    await bench.getByRole('button', { name: /Undo last completed set/ }).click();
-    await bench.locator('.count', { hasText: '1/4' }).waitFor();
+    // "+" completes the next set and starts the rest timer.
+    await flat().getByRole('button', { name: /Complete next set/ }).click();
+    await flat().locator('.count', { hasText: '1/4' }).waitFor();
+    await page.locator('#rest .rest-sub', { hasText: `${FLAT} · 3 sets left` }).waitFor();
+    await page.locator('#rest [data-rest-time]', { hasText: '1:30' }).waitFor();
+    await page.clock.runFor(30000);
+    await page.locator('#rest [data-rest-time]', { hasText: '1:00' }).waitFor();
+    await page.getByRole('button', { name: '15 seconds more' }).click();
+    await page.locator('#rest [data-rest-time]', { hasText: '1:15' }).waitFor();
+    await page.clock.runFor(76000);
+    await page.locator('#rest.is-done', { hasText: 'Next set!' }).waitFor();
+    await page.getByRole('button', { name: 'Skip' }).click();
+    assert.equal(await page.locator('#rest').isHidden(), true);
 
-    // Weight stepper on set 2: 185 -> 190.
-    await card(page, 'Bench Press').locator('.set-row').nth(1).getByRole('button', { name: 'Increase weight' }).click();
-    assert.equal(await card(page, 'Bench Press').locator('.set-row').nth(1).locator('input').first().inputValue(), '190');
-
-    // Type reps directly into set 2, then tick it done.
-    const reps = card(page, 'Bench Press').locator('.set-row').nth(1).locator('input').nth(1);
-    await reps.fill('6');
+    // "−" undoes; steppers and typing edit a set.
+    await flat().getByRole('button', { name: /Complete next set/ }).click();
+    await flat().getByRole('button', { name: /Undo last completed set/ }).click();
+    await flat().locator('.count', { hasText: '1/4' }).waitFor();
+    await flat().locator('.set-row').nth(1).getByRole('button', { name: 'Increase weight' }).click();
+    assert.equal(await flat().locator('.set-row').nth(1).locator('input').first().inputValue(), '190');
+    const reps = flat().locator('.set-row').nth(1).locator('input').nth(1);
+    await reps.fill('9');
     await reps.press('Enter');
     await page.waitForTimeout(50);
-    await card(page, 'Bench Press').locator('.set-row').nth(1).getByRole('button', { name: 'Set 2 done' }).click();
-    await card(page, 'Bench Press').locator('.count', { hasText: '2/4' }).waitFor();
+    await page.clock.runFor(95000);
+    await flat().locator('.set-row').nth(1).getByRole('button', { name: 'Set 2 done' }).click();
+    await flat().locator('.count', { hasText: '2/4' }).waitFor();
+    // Rest actually taken between sets 1 and 2 is shown.
+    await flat().locator('.set-row').nth(1).locator('.prev-hint', { hasText: /rested \d+:\d\d/ }).waitFor();
 
-    // Wait for the debounced sync and check the server.
-    const benchSets = (s) => s.sessions[TODAY].entries.find((e) => e.exerciseId === 'bench').sets.slice(0, 2).map((x) => [x.weight, x.reps, x.done]);
-    await serverHas(page, (s) => JSON.stringify(benchSets(s)) === JSON.stringify([[185, 8, true], [190, 6, true]]));
+    // RPE for the exercise.
+    await flat().locator('.rpe-row').getByText('last 8').waitFor();
+    await flat().locator('.rpe button', { hasText: '9' }).click();
+
+    const sets = (s) => todayEntry(s, 'flat-press').sets.slice(0, 2).map((x) => [x.weight, x.reps, x.done]);
+    await serverHas(page, (s) => JSON.stringify(sets(s)) === JSON.stringify([[185, 10, true], [190, 9, true]]) && todayEntry(s, 'flat-press').rpe === 9);
 
     await noHorizontalScroll(page);
     assert.deepEqual(errors, []);
     await context.close();
   });
 
-  test('targets can be changed for this week only', async () => {
+  test('targets can be changed for this rotation only', async () => {
     const { context, page, errors } = await openApp();
-    const bench = () => card(page, 'Bench Press');
-    await bench().getByRole('button', { name: 'Edit target' }).click();
-    await bench().locator('.target-edit').waitFor();
-    await bench().locator('.target-edit').getByRole('button', { name: 'Increase Sets' }).click();
-    await bench().locator('.count', { hasText: '2/5' }).waitFor();
-    await bench().locator('.target-edit').getByText('Last time (Mon, Sep 28)').waitFor();
-    await bench().locator('.target-edit .delta.up', { hasText: '+2 sets' }).waitFor();
+    const flat = () => card(page, FLAT);
+    await flat().getByRole('button', { name: 'Edit target' }).click();
+    await flat().locator('.target-edit').getByRole('button', { name: 'Increase Sets' }).click();
+    await flat().locator('.count', { hasText: '2/5' }).waitFor();
+    await flat().locator('.target-edit').getByText('Last time (Sun, Sep 27)').waitFor();
+    await flat().locator('.target-edit .delta.up', { hasText: '+1 sets' }).waitFor();
+    // Add a drop set from the editor.
+    await flat().locator('.target-edit').getByRole('button', { name: 'Increase Drop sets' }).click();
+    await flat().locator('.count', { hasText: '2/6' }).waitFor();
+    await flat().locator('.set-row.t-drop').waitFor();
     await shot(page, '02-target-edit');
-    await bench().locator('.target-edit').getByRole('button', { name: 'Decrease Sets' }).click();
-    await bench().locator('.count', { hasText: '2/4' }).waitFor();
+    await flat().locator('.target-edit').getByRole('button', { name: 'Decrease Drop sets' }).click();
+    await flat().locator('.target-edit').getByRole('button', { name: 'Decrease Sets' }).click();
+    await flat().locator('.count', { hasText: '2/4' }).waitFor();
 
-    // The weekly plan is untouched.
-    const s = await serverHas(page, (st) => st.sessions[TODAY].entries.find((e) => e.exerciseId === 'bench').target.sets === 4);
-    assert.equal(s.plan[1].items[0].sets, 4);
+    const s = await serverHas(page, (st) => todayEntry(st, 'flat-press').target.sets === 4 && !todayEntry(st, 'flat-press').sets.some((x) => x.type));
+    assert.equal(s.plan[0].items.find((it) => it.exerciseId === 'flat-press').sets, 4, 'plan untouched');
     assert.deepEqual(errors, []);
     await context.close();
   });
 
-  test('cardio, vacuum timer and adding exercises', async () => {
+  test('warm-up sets, set types and swapping exercises', async () => {
+    const { context, page, errors } = await openApp();
+    const push = () => card(page, 'Triceps Pushdown');
+    await push().locator('.set-row.t-warmup .idx', { hasText: 'W' }).waitFor();
+    await push().locator('.set-legend').waitFor();
+    // Tapping a set number cycles its type: warm-up, then drop set.
+    await push().locator('.set-row').nth(3).locator('.idx').click();
+    await push().locator('.set-row.t-warmup').nth(1).waitFor();
+    await push().locator('.set-row').nth(3).locator('.idx').click();
+    await push().locator('.set-row.t-drop').waitFor();
+
+    // Swap the incline machine for the pec deck.
+    await card(page, 'Incline Machine Press').getByRole('button', { name: /Swap Incline Machine Press/ }).click();
+    await page.locator('#sheet-title', { hasText: 'Swap for' }).waitFor();
+    await page.locator('#sheet-q').fill('pec deck');
+    await page.locator('.pick', { hasText: 'Cable Crossover / Pec Deck' }).click();
+    assert.equal(await card(page, 'Incline Machine Press').count(), 0);
+    assert.equal(await page.locator('article.entry h3', { hasText: 'Cable Crossover / Pec Deck' }).count(), 2);
+
+    const s = await serverHas(page, (st) => !todayEntry(st, 'incline-machine-press') && todayEntry(st, 'triceps-pushdown').sets.some((x) => x.type === 'drop'));
+    assert.equal(todayEntry(s, 'triceps-pushdown').sets[0].type, 'warmup');
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  test('cardio, vacuum timer, body weight and adding exercises', async () => {
     const { context, page, errors } = await openApp();
 
-    // Add cardio from the picker.
-    await page.getByRole('button', { name: /Add exercise, cardio or vacuum/ }).click();
-    await page.locator('#sheet-q').fill('tread');
-    await page.locator('.pick', { hasText: 'Treadmill' }).click();
-    const tread = card(page, 'Treadmill');
-    await tread.waitFor();
-    await tread.getByRole('button', { name: 'Increase Minutes' }).click();
-    await tread.getByRole('button', { name: 'Mark cardio complete' }).click();
-    await card(page, 'Treadmill').locator('.count', { hasText: '1/1' }).waitFor();
+    const walk = () => card(page, 'Incline Treadmill Walk');
+    await walk().locator('.cue', { hasText: '3 mph · incline 12' }).waitFor();
+    await walk().getByRole('button', { name: 'Increase Minutes' }).click();
+    await walk().getByRole('button', { name: 'Mark cardio complete' }).click();
+    await walk().locator('.count', { hasText: '1/1' }).waitFor();
+
+    // Vacuum hold timer.
+    const vac = () => card(page, 'Stomach Vacuum');
+    await vac().locator('.target-line', { hasText: '5–8 × 10s hold' }).waitFor();
+    await vac().getByRole('button', { name: 'Start hold timer' }).first().click();
+    await page.clock.runFor(11000);
+    await vac().locator('[data-timer]').filter({ hasText: /1[01]s/ }).waitFor();
+    await vac().getByRole('button', { name: 'Stop timer and log hold' }).click();
+    const first = vac().locator('.set-row').first();
+    assert.equal(await first.locator('input').inputValue(), '11');
+    assert.equal(await first.locator('.check').getAttribute('aria-pressed'), 'true');
+    await page.locator('#rest .rest-sub', { hasText: 'Stomach Vacuum · 4 sets left' }).waitFor();
+    await page.getByRole('button', { name: 'Skip' }).click();
+
+    // Scale weight: first weigh-in, then the stepper.
+    await page.getByRole('button', { name: 'Log weight' }).click();
+    const bw = page.locator('.bw input');
+    await bw.fill('182.4');
+    await bw.press('Enter');
+    await page.locator('.bw').getByText('7-day avg').waitFor();
+    await page.locator('.bw').getByRole('button', { name: 'Increase weight' }).click();
+    assert.equal(await page.locator('.bw input').inputValue(), '182.6');
 
     // Create a brand-new exercise.
     await page.getByRole('button', { name: /Add exercise, cardio or vacuum/ }).click();
-    await page.locator('#sheet-q').fill('Hanging Leg Raise');
+    await page.locator('#sheet-q').fill('Landmine Press');
     await page.getByRole('button', { name: 'Strength', exact: true }).last().click();
-    await card(page, 'Hanging Leg Raise').waitFor();
-
-    // Vacuum hold timer.
-    const vac = card(page, 'Stomach Vacuum (standing)');
-    await vac.getByRole('button', { name: 'Start hold timer' }).first().click();
-    await page.clock.runFor(12000);
-    await card(page, 'Stomach Vacuum (standing)').locator('[data-timer]').filter({ hasText: /1[12]s/ }).waitFor();
-    await card(page, 'Stomach Vacuum (standing)').getByRole('button', { name: 'Stop timer and log hold' }).click();
-    const first = card(page, 'Stomach Vacuum (standing)').locator('.set-row').first();
-    assert.equal(await first.locator('input').inputValue(), '12');
-    assert.equal(await first.locator('.check').getAttribute('aria-pressed'), 'true');
+    await card(page, 'Landmine Press').waitFor();
     await shot(page, '03-cardio-vacuum');
 
-    // Day type.
-    await page.getByRole('button', { name: 'Active rest', exact: true }).click();
-    await serverHas(page, (s) => s.sessions[TODAY].dayType === 'active' && s.sessions[TODAY].entries.some((e) => e.exerciseId === 'treadmill' && e.cardio.done && e.cardio.minutes === 21));
+    const s = await serverHas(page, (st) => st.body[TODAY]?.weight === 182.6 && todayEntry(st, 'incline-walk').cardio.done && todayEntry(st, 'incline-walk').cardio.minutes === 31);
+    assert.equal(todayEntry(s, 'vacuum').sets[0].holdSec, 11);
     assert.deepEqual(errors, []);
     await context.close();
   });
 
   test('removing an exercise can be undone', async () => {
     const { context, page, errors } = await openApp();
-    await card(page, 'Overhead Press').getByRole('button', { name: 'Remove Overhead Press' }).click();
-    assert.equal(await card(page, 'Overhead Press').count(), 0);
+    await card(page, 'Dips').getByRole('button', { name: 'Remove Dips' }).click();
+    assert.equal(await card(page, 'Dips').count(), 0);
     await page.locator('#toast-action').click();
-    await card(page, 'Overhead Press').waitFor();
+    await card(page, 'Dips').waitFor();
     assert.deepEqual(errors, []);
     await context.close();
   });
 
-  test('editing the weekly plan changes future days', async () => {
+  test('editing the plan changes future days', async () => {
     const { context, page, errors } = await openApp(PHONE, '#plan');
-    const thursday = page.locator('article.planday', { has: page.locator('.wdname', { hasText: 'Thursday' }) });
-    const name = page.getByRole('textbox', { name: 'Thursday name' });
-    await name.fill('Mobility');
+    const day4 = page.locator('article.planday', { has: page.locator('.wdname', { hasText: 'Day 4' }) });
+    const name = page.getByRole('textbox', { name: 'Day 4 name' });
+    await name.fill('Recovery');
     await name.press('Enter');
-    await thursday.getByRole('button', { name: '+ Add exercise' }).click();
-    await page.locator('#sheet-q').fill('Rowing');
-    await page.locator('.pick', { hasText: 'Rowing Machine' }).click();
-    await thursday.getByText('Rowing Machine').waitFor();
+    await day4.getByRole('button', { name: '+ Add exercise' }).click();
+    await page.locator('#sheet-q').fill('flutter');
+    await page.locator('.pick', { hasText: 'Lying Flutter Kicks' }).click();
+    await day4.getByText('Lying Flutter Kicks').waitFor();
+
+    // Advanced options: give an item a rest time and a note.
+    const item = day4.locator('.planitem', { hasText: 'Lying Flutter Kicks' });
+    await item.getByRole('button', { name: /More options/ }).click();
+    await item.getByRole('button', { name: 'Increase Rest (0=default)' }).click();
+    const note = item.locator('input[data-field="plan-note"]');
+    await note.fill('Slow and controlled');
+    await note.press('Enter');
+    await item.getByText('rest 15s').waitFor();
     await shot(page, '04-plan');
 
-    // Thursday this week in the log follows the new plan.
+    // Day 4 this week (Thursday Oct 8) follows the new plan.
     await page.getByRole('button', { name: 'Log' }).click();
     await page.locator('.weekstrip button').nth(3).click();
-    assert.equal(await page.locator('.dayname').inputValue(), 'Mobility');
-    await card(page, 'Rowing Machine').waitFor();
+    assert.equal(await page.locator('.dayname').inputValue(), 'Recovery');
+    await card(page, 'Lying Flutter Kicks').locator('.cue', { hasText: 'Slow and controlled' }).waitFor();
     await noHorizontalScroll(page);
     assert.deepEqual(errors, []);
     await context.close();
   });
 
-  test('progress view shows charts and history', async () => {
+  test('progress view shows charts, body weight and history', async () => {
     const { context, page, errors } = await openApp(PHONE, '#progress');
     await page.locator('#chart-activity svg').waitFor();
+    await page.locator('#chart-body svg').waitFor();
+    await page.locator('select[data-field="progress-exercise"]').selectOption('flat-press');
     await page.locator('#chart-exercise svg').waitFor();
-    await page.locator('select[data-field="progress-exercise"]').selectOption('bench');
     await page.getByRole('button', { name: 'Top weight' }).click();
     await page.locator('.prs').getByText('Heaviest set').waitFor();
+    await page.locator('.table td', { hasText: '9' }).first().waitFor(); // RPE column
     await page.locator('.history-item').first().waitFor();
     for (const r of ['1W', '4W', '6M', '1Y', 'All']) await page.getByRole('button', { name: r, exact: true }).click();
     await shot(page, '05-progress');
@@ -249,17 +317,18 @@ describe('workout logbook in the browser', () => {
 
   test('data syncs between devices and settings apply', async () => {
     const desktop = await openApp(DESKTOP);
-    // Logged on the "phone" in earlier tests; visible on desktop.
-    await card(desktop.page, 'Bench Press').locator('.count', { hasText: '2/4' }).waitFor();
+    await card(desktop.page, FLAT).locator('.count', { hasText: '2/4' }).waitFor();
     await shot(desktop.page, '06-log-desktop');
 
     await desktop.page.getByRole('button', { name: 'Settings' }).click();
-    await desktop.page.getByRole('button', { name: 'kg', exact: true }).click();
-    await serverHas(desktop.page, (s) => s.settings.unit === 'kg');
+    await desktop.page.getByRole('button', { name: 'Increase restSec' }).click();
+    await serverHas(desktop.page, (s) => s.settings.restSec === 105);
     await shot(desktop.page, '07-settings');
 
     const phone = await openApp(PHONE);
-    await card(phone.page, 'Bench Press').getByText('Weight (kg)').waitFor();
+    await card(phone.page, FLAT).getByRole('button', { name: /Complete next set/ }).click();
+    await phone.page.locator('#rest [data-rest-time]', { hasText: '1:45' }).waitFor();
+    await serverHas(phone.page, (s) => todayEntry(s, 'flat-press').sets.filter((x) => x.done).length === 3);
     await noHorizontalScroll(desktop.page);
     assert.deepEqual([...desktop.errors, ...phone.errors], []);
     await desktop.context.close();
@@ -269,15 +338,30 @@ describe('workout logbook in the browser', () => {
   test('works offline from local storage', async () => {
     const { context, page } = await openApp();
     await context.setOffline(true);
-    await card(page, 'Bench Press').getByRole('button', { name: /Complete next set/ }).click();
+    await card(page, FLAT).getByRole('button', { name: /Complete next set/ }).click();
     await page.clock.runFor(1500);
     await page.waitForSelector('#sync[data-status="offline"]');
     await page.reload();
-    await card(page, 'Bench Press').locator('.count', { hasText: '3/4' }).waitFor();
-    // Back online: the change reaches the server.
+    await card(page, FLAT).locator('.count', { hasText: '4/4' }).waitFor();
     await context.setOffline(false);
     await page.evaluate(() => window.logbook.store.sync());
-    await serverHas(page, (s) => s.sessions[TODAY].entries.find((e) => e.exerciseId === 'bench').sets.filter((x) => x.done).length === 3);
+    await serverHas(page, (s) => todayEntry(s, 'flat-press').sets.filter((x) => x.done).length === 4);
+    await context.close();
+  });
+
+  test('the rotation can be re-anchored after a missed day', async () => {
+    const { context, page, errors } = await openApp();
+    // Tomorrow would be Day 2; say we skipped and tomorrow is Day 1 again.
+    await page.getByRole('button', { name: 'Next day' }).click();
+    assert.equal(await page.locator('.dayname').inputValue(), 'Back & Biceps');
+    await page.locator('select[data-field="plan-day"]').selectOption('0');
+    await page.locator('.dayname[value="Chest & Triceps"]').waitFor();
+    // The day after that is now Day 2, and today's logged session is untouched.
+    await page.getByRole('button', { name: 'Next day' }).click();
+    assert.equal(await page.locator('.dayname').inputValue(), 'Back & Biceps');
+    const s = await serverHas(page, (st) => st.settings.cycleStart === '2026-10-06');
+    assert.equal(s.sessions[TODAY].name, 'Chest & Triceps');
+    assert.deepEqual(errors, []);
     await context.close();
   });
 });

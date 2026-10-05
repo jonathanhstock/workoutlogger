@@ -2,8 +2,8 @@
 // immediately when online; falls back to the cached copy when offline.
 // API calls are never cached (the app keeps its own local copy of data).
 
-const CACHE = 'logbook-v1';
-const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/model.js', 'js/store.js', 'js/charts.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
+const CACHE = 'logbook-v2';
+const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/model.js', 'js/program.js', 'js/store.js', 'js/charts.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

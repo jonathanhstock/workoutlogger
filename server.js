@@ -18,6 +18,8 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const MAX_BODY = 20 * 1024 * 1024;
 const BACKUPS_KEPT = 30;
+const MAX_FAILURES = 10;
+const LOCKOUT_MS = 15 * 60 * 1000;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -30,7 +32,7 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-export function createServer({ dataDir = path.join(ROOT, 'data'), password = '' } = {}) {
+export function createServer({ dataDir = path.join(ROOT, 'data'), password = '', trustProxy = false } = {}) {
   const dbFile = path.join(dataDir, 'logbook.json');
   const backupDir = path.join(dataDir, 'backups');
   fs.mkdirSync(backupDir, { recursive: true });
@@ -54,17 +56,33 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '' 
     return writeChain;
   }
 
+  // Slow down password guessing: after too many failures from one address,
+  // refuse further attempts for a while.
+  const failures = new Map(); // ip -> { count, first, until }
+  const clientIp = (req) => (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
+
   function authorized(req) {
     if (!password) return true;
     const header = req.headers.authorization || '';
-    const given = Buffer.from(header.startsWith('Bearer ') ? header.slice(7) : '');
-    const expected = Buffer.from(password);
-    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+    const given = crypto.createHash('sha256').update(header.startsWith('Bearer ') ? header.slice(7) : '').digest();
+    const expected = crypto.createHash('sha256').update(password).digest();
+    return crypto.timingSafeEqual(given, expected);
   }
 
   async function handleApi(req, res, url) {
     if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, auth: !!password });
-    if (!authorized(req)) return sendJson(res, 401, { error: 'Password required' });
+    const ip = clientIp(req);
+    const f = failures.get(ip);
+    if (f && f.until > Date.now()) return sendJson(res, 429, { error: 'Too many attempts. Try again later.' });
+    if (!authorized(req)) {
+      const t = Date.now();
+      const fresh = !f || t - f.first > LOCKOUT_MS;
+      const count = fresh ? 1 : f.count + 1;
+      failures.set(ip, { count, first: fresh ? t : f.first, until: count >= MAX_FAILURES ? t + LOCKOUT_MS : 0 });
+      if (failures.size > 10000) failures.clear();
+      return sendJson(res, 401, { error: 'Password required' });
+    }
+    if (f) failures.delete(ip);
 
     if (url.pathname === '/api/state') {
       if (req.method === 'GET') return sendJson(res, 200, state);
@@ -87,7 +105,12 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '' 
   }
 
   async function serveStatic(req, res, url) {
-    let rel = decodeURIComponent(url.pathname);
+    let rel;
+    try {
+      rel = decodeURIComponent(url.pathname);
+    } catch {
+      return sendText(res, 400, 'Bad request');
+    }
     if (rel.endsWith('/')) rel += 'index.html';
     const file = path.normalize(path.join(PUBLIC_DIR, rel));
     if (!file.startsWith(PUBLIC_DIR + path.sep)) return sendText(res, 403, 'Forbidden');
@@ -165,6 +188,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = createServer({
     dataDir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : undefined,
     password: process.env.APP_PASSWORD || '',
+    // Hosts like Render put the real client address in X-Forwarded-For.
+    trustProxy: process.env.TRUST_PROXY === '1' || !!process.env.RENDER,
   });
   server.listen(port, () => {
     console.log(`Workout Logbook running at http://localhost:${port}`);

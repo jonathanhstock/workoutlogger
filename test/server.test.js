@@ -41,8 +41,9 @@ describe('server without password', () => {
 
   test('GET state returns a default logbook', async () => {
     const s = await (await fetch(`${ctx.base}/api/state`)).json();
-    assert.equal(s.schemaVersion, 1);
-    assert.ok(s.exercises.bench);
+    assert.equal(s.schemaVersion, 2);
+    assert.ok(s.exercises['incline-machine-press']);
+    assert.equal(s.settings.unit, 'lb');
   });
 
   test('PUT merges and persists to disk', async () => {
@@ -116,6 +117,16 @@ describe('server with password', () => {
     assert.equal((await fetch(`${ctx.base}/api/state`)).status, 401);
     assert.equal((await fetch(`${ctx.base}/api/state`, { headers: { Authorization: 'Bearer wrong' } })).status, 401);
     assert.equal((await fetch(`${ctx.base}/api/state`, { headers: { Authorization: 'Bearer hunter2' } })).status, 200);
+  });
+
+  test('locks out an address after repeated wrong passwords', async () => {
+    const other = await start({ dataDir: tmpDir(), password: 'pw' });
+    let last;
+    for (let i = 0; i < 11; i++) last = (await fetch(`${other.base}/api/state`, { headers: { Authorization: 'Bearer nope' } })).status;
+    assert.equal(last, 429);
+    // Even the right password is refused during the lockout.
+    assert.equal((await fetch(`${other.base}/api/state`, { headers: { Authorization: 'Bearer pw' } })).status, 429);
+    other.server.close();
   });
 
   test('health and the app shell stay public', async () => {

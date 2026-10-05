@@ -2,13 +2,19 @@
 // Shared by the browser app, the Node server (for merging) and the tests,
 // so nothing in here may touch the DOM, storage or the network.
 
-export const SCHEMA_VERSION = 1;
+import { EXERCISES, PLAN } from './program.js';
+
+export const SCHEMA_VERSION = 2;
 
 export const KINDS = {
   strength: 'Strength',
   cardio: 'Cardio',
   vacuum: 'Stomach vacuum',
+  timed: 'Timed hold',
 };
+
+/** Kinds logged as sets of held seconds rather than weight × reps. */
+export const isHold = (kind) => kind === 'vacuum' || kind === 'timed';
 
 export const DAY_TYPES = {
   training: 'Training',
@@ -16,8 +22,18 @@ export const DAY_TYPES = {
   rest: 'Rest',
 };
 
+/** Set types. Warm-ups are logged but don't count toward load or PRs. */
+export const SET_TYPES = {
+  work: { short: '', label: 'Working set' },
+  warmup: { short: 'W', label: 'Warm-up set' },
+  drop: { short: 'D', label: 'Drop set' },
+  failure: { short: 'F', label: 'To failure / partials' },
+};
+const SET_TYPE_ORDER = ['work', 'warmup', 'drop', 'failure'];
+
 export const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 export const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export const MAX_PLAN_DAYS = 14;
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -84,102 +100,121 @@ export function round(n, digits = 2) {
 }
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const setType = (s) => s.type || 'work';
 
 // ---------------------------------------------------------------------------
 // Default state
 // ---------------------------------------------------------------------------
 
-const DEFAULT_EXERCISES = [
-  ['bench', 'Bench Press', 'strength', 'Chest'],
-  ['incline-db', 'Incline Dumbbell Press', 'strength', 'Chest'],
-  ['ohp', 'Overhead Press', 'strength', 'Shoulders'],
-  ['lateral-raise', 'Lateral Raise', 'strength', 'Shoulders'],
-  ['pushdown', 'Triceps Pushdown', 'strength', 'Arms'],
-  ['deadlift', 'Deadlift', 'strength', 'Back'],
-  ['pullup', 'Pull-up', 'strength', 'Back'],
-  ['row', 'Barbell Row', 'strength', 'Back'],
-  ['lat-pulldown', 'Lat Pulldown', 'strength', 'Back'],
-  ['curl', 'Dumbbell Curl', 'strength', 'Arms'],
-  ['squat', 'Back Squat', 'strength', 'Legs'],
-  ['rdl', 'Romanian Deadlift', 'strength', 'Legs'],
-  ['leg-press', 'Leg Press', 'strength', 'Legs'],
-  ['leg-curl', 'Leg Curl', 'strength', 'Legs'],
-  ['calf-raise', 'Calf Raise', 'strength', 'Legs'],
-  ['treadmill', 'Treadmill', 'cardio', 'Cardio'],
-  ['incline-walk', 'Incline Walk', 'cardio', 'Cardio'],
-  ['bike', 'Stationary Bike', 'cardio', 'Cardio'],
-  ['stairmaster', 'Stairmaster', 'cardio', 'Cardio'],
-  ['rower', 'Rowing Machine', 'cardio', 'Cardio'],
-  ['vacuum-standing', 'Stomach Vacuum (standing)', 'vacuum', 'Core'],
-  ['vacuum-kneeling', 'Stomach Vacuum (kneeling)', 'vacuum', 'Core'],
-  ['vacuum-lying', 'Stomach Vacuum (lying)', 'vacuum', 'Core'],
-];
-
-function planItem(exerciseId, kind, t) {
-  return { id: uid(), exerciseId, ...defaultTarget(kind), ...t };
+function emptyPlanDay(ts) {
+  return { name: '', dayType: 'rest', note: '', items: [], updatedAt: ts };
 }
 
-/** A starter split the user can freely edit. Keyed by weekday (0 = Sunday). */
 function defaultPlan(ts) {
-  const day = (name, dayType, items) => ({ name, dayType, items, updatedAt: ts });
-  const s = (id, sets, reps, weight = 0) => planItem(id, 'strength', { sets, reps, weight });
-  const c = (id, minutes, distance = 0) => planItem(id, 'cardio', { minutes, distance });
-  const v = (id, sets, holdSec) => planItem(id, 'vacuum', { sets, holdSec });
+  const plan = {};
+  for (let i = 0; i < MAX_PLAN_DAYS; i++) {
+    const d = PLAN.days[i];
+    plan[i] = d
+      ? { name: d.name, dayType: d.dayType, note: d.note || '', items: d.items.map((it) => ({ id: uid(), ...clone(it) })), updatedAt: ts }
+      : emptyPlanDay(ts);
+  }
+  return plan;
+}
+
+export function defaultSettings(ts) {
   return {
-    1: day('Push', 'training', [s('bench', 4, 8), s('ohp', 3, 8), s('incline-db', 3, 10), s('lateral-raise', 3, 12), s('pushdown', 3, 12), v('vacuum-standing', 3, 20)]),
-    2: day('Pull', 'training', [s('deadlift', 3, 5), s('pullup', 3, 8), s('row', 3, 8), s('lat-pulldown', 3, 10), s('curl', 3, 12), v('vacuum-standing', 3, 20)]),
-    3: day('Legs', 'training', [s('squat', 4, 6), s('rdl', 3, 8), s('leg-press', 3, 10), s('leg-curl', 3, 12), s('calf-raise', 4, 12), v('vacuum-standing', 3, 20)]),
-    4: day('Active rest', 'active', [c('incline-walk', 30), v('vacuum-kneeling', 4, 25)]),
-    5: day('Upper', 'training', [s('bench', 3, 6), s('row', 3, 8), s('ohp', 3, 10), s('pullup', 3, 8), s('curl', 2, 12), s('pushdown', 2, 12), v('vacuum-standing', 3, 20)]),
-    6: day('Lower + cardio', 'training', [s('squat', 3, 8), s('rdl', 3, 10), s('leg-curl', 3, 12), c('bike', 20), v('vacuum-lying', 3, 30)]),
-    0: day('Rest', 'rest', [v('vacuum-lying', 3, 30)]),
+    unit: 'lb',
+    distanceUnit: 'mi',
+    weightStep: 5,
+    weekStart: 1,
+    planMode: PLAN.mode,
+    cycleLength: PLAN.length,
+    cycleStart: todayISO(),
+    restSec: 90,
+    autoRest: true,
+    restSound: true,
+    updatedAt: ts,
   };
 }
 
 export function defaultState(ts = now()) {
   const exercises = {};
-  for (const [id, name, kind, group] of DEFAULT_EXERCISES) {
+  for (const [id, name, kind, group] of EXERCISES) {
     exercises[id] = { id, name, kind, group, updatedAt: ts };
   }
   return {
     schemaVersion: SCHEMA_VERSION,
-    settings: { unit: 'lb', distanceUnit: 'mi', weightStep: 5, weekStart: 1, updatedAt: ts },
+    settings: defaultSettings(ts),
     exercises,
     plan: defaultPlan(ts),
     sessions: {},
+    body: {},
   };
 }
 
 export function defaultTarget(kind) {
   if (kind === 'cardio') return { minutes: 20, distance: 0 };
-  if (kind === 'vacuum') return { sets: 3, holdSec: 20 };
+  if (kind === 'vacuum') return { sets: 5, holdSec: 10 };
+  if (kind === 'timed') return { sets: 3, holdSec: 45 };
   return { sets: 3, reps: 10, weight: 0 };
 }
 
 // ---------------------------------------------------------------------------
-// Validation / migration (used on load and import)
+// Validation / migration (used on load, import and by the server)
 // ---------------------------------------------------------------------------
+
+const TARGET_NUMS = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, weight: 100000, warmupSets: 10, warmupReps: 1000, dropSets: 10, failureSets: 10, restSec: 1800, minutes: 100000, distance: 100000, holdSec: 3600 };
+
+/** Clean a plan item / entry target. Unknown keys are dropped. */
+export function normalizeTarget(t) {
+  const out = {};
+  if (!isObj(t)) return out;
+  for (const [k, max] of Object.entries(TARGET_NUMS)) {
+    if (t[k] !== undefined && t[k] !== null && t[k] !== '') out[k] = clampNum(t[k], 0, max);
+  }
+  if (Array.isArray(t.repScheme)) {
+    const scheme = t.repScheme.map((r) => Math.round(clampNum(r, 0, 1000))).filter((r) => r > 0).slice(0, 20);
+    if (scheme.length) out.repScheme = scheme;
+  }
+  if (t.note) out.note = String(t.note).slice(0, 300);
+  if (t.optional) out.optional = true;
+  return out;
+}
 
 /**
  * Coerce arbitrary (possibly old, partial or hand-edited) data into a valid
  * state object. Never throws for "shape" problems; it repairs what it can.
  */
 export function normalizeState(input) {
-  const base = defaultState(0);
-  if (!input || typeof input !== 'object') return defaultState(0);
+  if (!isObj(input)) return defaultState(0);
+  const inSettings = isObj(input.settings) ? input.settings : {};
+  const st = { ...defaultSettings(0), ...inSettings };
+  // Logbooks from before rotations existed were weekly.
+  if (isObj(input.settings) && !inSettings.planMode) st.planMode = 'weekly';
   const out = {
     schemaVersion: SCHEMA_VERSION,
-    settings: { ...base.settings, ...(isObj(input.settings) ? input.settings : {}) },
+    settings: {
+      unit: st.unit === 'kg' ? 'kg' : 'lb',
+      distanceUnit: st.distanceUnit === 'km' ? 'km' : 'mi',
+      weightStep: clampNum(st.weightStep, 0.25, 100) || 5,
+      weekStart: Number(st.weekStart) === 0 ? 0 : 1,
+      planMode: st.planMode === 'weekly' ? 'weekly' : 'cycle',
+      cycleLength: Math.round(clampNum(st.cycleLength, 2, MAX_PLAN_DAYS)),
+      cycleStart: isISODate(st.cycleStart) ? st.cycleStart : todayISO(),
+      restSec: Math.round(clampNum(st.restSec, 0, 1800)),
+      autoRest: st.autoRest !== false,
+      restSound: st.restSound !== false,
+      updatedAt: Number(st.updatedAt) || 0,
+    },
     exercises: {},
     plan: {},
     sessions: {},
+    body: {},
   };
-  out.settings.unit = out.settings.unit === 'kg' ? 'kg' : 'lb';
-  out.settings.distanceUnit = out.settings.distanceUnit === 'km' ? 'km' : 'mi';
-  out.settings.weightStep = clampNum(out.settings.weightStep, 0.25, 100) || 5;
-  out.settings.weekStart = Number(out.settings.weekStart) === 0 ? 0 : 1;
-  out.settings.updatedAt = Number(out.settings.updatedAt) || 0;
 
+  const needDefaults = !isObj(input.exercises) || !isObj(input.plan);
+  const base = needDefaults ? defaultState(0) : null;
   const exercises = isObj(input.exercises) ? input.exercises : base.exercises;
   for (const [id, ex] of Object.entries(exercises)) {
     if (!isObj(ex)) continue;
@@ -194,12 +229,17 @@ export function normalizeState(input) {
   }
 
   const plan = isObj(input.plan) ? input.plan : base.plan;
-  for (let wd = 0; wd < 7; wd++) {
-    const d = isObj(plan[wd]) ? plan[wd] : { name: '', dayType: 'rest', items: [] };
-    out.plan[wd] = {
+  for (let i = 0; i < MAX_PLAN_DAYS; i++) {
+    const d = plan[i];
+    if (!isObj(d)) {
+      out.plan[i] = emptyPlanDay(0);
+      continue;
+    }
+    out.plan[i] = {
       name: String(d.name || '').slice(0, 60),
       dayType: DAY_TYPES[d.dayType] ? d.dayType : 'training',
-      items: (Array.isArray(d.items) ? d.items : []).filter((it) => isObj(it) && it.exerciseId).map((it) => normalizeTarget({ ...it, id: it.id || uid() })),
+      note: String(d.note || '').slice(0, 500),
+      items: (Array.isArray(d.items) ? d.items : []).filter((it) => isObj(it) && it.exerciseId).map((it) => ({ id: String(it.id || uid()), exerciseId: String(it.exerciseId), ...normalizeTarget(it) })),
       updatedAt: Number(d.updatedAt) || 0,
     };
   }
@@ -215,22 +255,17 @@ export function normalizeState(input) {
       date,
       name: String(s.name || '').slice(0, 60),
       dayType: DAY_TYPES[s.dayType] ? s.dayType : 'training',
+      note: String(s.note || '').slice(0, 500),
       notes: String(s.notes || '').slice(0, 5000),
       entries: (Array.isArray(s.entries) ? s.entries : []).filter((e) => isObj(e) && e.exerciseId).map(normalizeEntry),
       updatedAt: Number(s.updatedAt) || 0,
     };
   }
-  return out;
-}
 
-function isObj(v) {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
-}
-
-function normalizeTarget(t) {
-  const out = { id: t.id || uid(), exerciseId: String(t.exerciseId) };
-  for (const k of ['sets', 'reps', 'weight', 'minutes', 'distance', 'holdSec']) {
-    if (t[k] !== undefined) out[k] = clampNum(t[k], 0, 100000);
+  const body = isObj(input.body) ? input.body : {};
+  for (const [date, b] of Object.entries(body)) {
+    if (!isISODate(date) || !isObj(b)) continue;
+    out.body[date] = { weight: round(clampNum(b.weight, 0, 2000), 2), updatedAt: Number(b.updatedAt) || 0 };
   }
   return out;
 }
@@ -238,14 +273,13 @@ function normalizeTarget(t) {
 function normalizeEntry(e) {
   const kind = KINDS[e.kind] ? e.kind : 'strength';
   const out = {
-    id: e.id || uid(),
+    id: String(e.id || uid()),
     exerciseId: String(e.exerciseId),
     kind,
-    target: normalizeTarget({ ...(isObj(e.target) ? e.target : defaultTarget(kind)), exerciseId: e.exerciseId }),
+    target: { ...defaultTarget(kind), ...normalizeTarget(e.target) },
     notes: String(e.notes || '').slice(0, 1000),
+    rpe: round(clampNum(e.rpe, 0, 10), 1),
   };
-  delete out.target.id;
-  delete out.target.exerciseId;
   if (kind === 'cardio') {
     const c = isObj(e.cardio) ? e.cardio : {};
     out.cardio = {
@@ -256,11 +290,14 @@ function normalizeEntry(e) {
       done: !!c.done,
     };
   } else {
-    out.sets = (Array.isArray(e.sets) ? e.sets : []).filter(isObj).map((s) =>
-      kind === 'vacuum'
-        ? { id: s.id || uid(), holdSec: clampNum(s.holdSec), done: !!s.done }
-        : { id: s.id || uid(), reps: clampNum(s.reps), weight: clampNum(s.weight), done: !!s.done },
-    );
+    out.sets = (Array.isArray(e.sets) ? e.sets : []).filter(isObj).map((s) => {
+      const set = isHold(kind)
+        ? { id: String(s.id || uid()), holdSec: clampNum(s.holdSec), done: !!s.done }
+        : { id: String(s.id || uid()), reps: clampNum(s.reps), weight: clampNum(s.weight), done: !!s.done };
+      if (!isHold(kind) && SET_TYPES[s.type] && s.type !== 'work') set.type = s.type;
+      if (s.done && Number(s.at)) set.at = Number(s.at);
+      return set;
+    });
   }
   return out;
 }
@@ -270,9 +307,9 @@ function normalizeEntry(e) {
 // ---------------------------------------------------------------------------
 
 /**
- * Merge two states record-by-record. For each exercise, plan day, session and
- * the settings object, the version with the newest `updatedAt` wins. Deletions
- * are kept as tombstones so they propagate between devices.
+ * Merge two states record-by-record. For each exercise, plan day, session,
+ * body-weight entry and the settings object, the version with the newest
+ * `updatedAt` wins. Deletions are kept as tombstones so they propagate.
  * The function is commutative, associative and idempotent, which makes sync
  * safe to repeat in any order.
  */
@@ -297,6 +334,7 @@ export function mergeStates(a, b) {
     exercises: mergeMap(a.exercises, b.exercises),
     plan: mergeMap(a.plan, b.plan),
     sessions: mergeMap(a.sessions, b.sessions),
+    body: mergeMap(a.body, b.body),
   };
 }
 
@@ -329,6 +367,62 @@ export function addExercise(state, { name, kind = 'strength', group = '' }) {
 }
 
 // ---------------------------------------------------------------------------
+// Plan (weekly, or an N-day rotation like 3 on / 1 off)
+// ---------------------------------------------------------------------------
+
+export function isCycle(state) {
+  return state.settings.planMode === 'cycle';
+}
+
+export function planDayCount(state) {
+  return isCycle(state) ? state.settings.cycleLength : 7;
+}
+
+/** Which plan day applies to a calendar date. */
+export function planIndex(state, date) {
+  if (!isCycle(state)) return weekdayOf(date);
+  const n = state.settings.cycleLength;
+  return (((daysBetween(state.settings.cycleStart, date) % n) + n) % n);
+}
+
+export function planLabel(state, idx) {
+  return isCycle(state) ? `Day ${idx + 1}` : WEEKDAY_NAMES[idx];
+}
+
+/** Plan day indexes in display order. */
+export function planOrder(state) {
+  if (isCycle(state)) return Array.from({ length: state.settings.cycleLength }, (_, i) => i);
+  return Array.from({ length: 7 }, (_, i) => (state.settings.weekStart + i) % 7);
+}
+
+export function planDay(state, idx) {
+  return state.plan[idx] || emptyPlanDay(0);
+}
+
+/** Shift the rotation so that `date` is plan day `idx`. */
+export function anchorCycle(state, date, idx) {
+  state.settings.cycleStart = addDays(date, -idx);
+  state.settings.updatedAt = now();
+}
+
+/** Copy a session's exercises and targets into the plan day for that date. */
+export function saveSessionAsPlan(state, date) {
+  const s = getSession(state, date) || sessionOrDraft(state, date).session;
+  state.plan[planIndex(state, date)] = {
+    name: s.name,
+    dayType: s.dayType,
+    note: s.note || '',
+    items: s.entries.map((e) => ({ id: uid(), exerciseId: e.exerciseId, ...normalizeTarget(e.target) })),
+    updatedAt: now(),
+  };
+}
+
+export function copyPlanDay(state, from, to) {
+  const src = planDay(state, from);
+  state.plan[to] = { name: src.name, dayType: src.dayType, note: src.note, items: src.items.map((it) => ({ ...clone(it), id: uid() })), updatedAt: now() };
+}
+
+// ---------------------------------------------------------------------------
 // Sessions (one per calendar day)
 // ---------------------------------------------------------------------------
 
@@ -337,53 +431,77 @@ export function getSession(state, date) {
   return s && !s.deleted ? s : null;
 }
 
+function roundToStep(v, step) {
+  return step > 0 ? round(Math.round(v / step) * step, 2) : round(v, 2);
+}
+
 /** Build a new entry for an exercise, pre-filled from targets and last performance. */
 export function makeEntry(state, exerciseId, target, beforeDate) {
   const kind = exerciseKind(state, exerciseId);
-  const t = { ...defaultTarget(kind), ...pickTarget(kind, target || {}) };
-  const entry = { id: uid(), exerciseId, kind, target: t, notes: '' };
+  const t = { ...defaultTarget(kind), ...normalizeTarget(target || {}) };
+  if (t.repScheme) {
+    t.sets = t.repScheme.length;
+    if (!target?.reps) t.reps = t.repScheme[0];
+  }
+  const entry = { id: uid(), exerciseId, kind, target: t, notes: '', rpe: 0 };
   const prev = beforeDate ? previousEntry(state, exerciseId, beforeDate) : null;
+
   if (kind === 'cardio') {
     entry.cardio = { minutes: t.minutes, distance: t.distance, calories: 0, avgHr: 0, done: false };
-  } else if (kind === 'vacuum') {
-    entry.sets = Array.from({ length: t.sets }, () => ({ id: uid(), holdSec: t.holdSec, done: false }));
-  } else {
-    // Pre-fill each set with what you lifted last time (progressive overload
-    // starts from your real numbers), falling back to the planned weight.
-    const prevSets = prev?.entry.sets?.filter((s) => s.done) || [];
-    entry.sets = Array.from({ length: t.sets }, (_, i) => {
-      const p = prevSets[i] || prevSets[prevSets.length - 1];
-      const weight = t.weight || p?.weight || 0;
-      return { id: uid(), reps: t.reps, weight, done: false };
-    });
-    // Show the real working weight as this day's target.
-    if (!t.weight && prevSets.length) t.weight = Math.max(...prevSets.map((s) => s.weight || 0));
+    return entry;
   }
+  if (isHold(kind)) {
+    entry.sets = Array.from({ length: t.sets }, () => ({ id: uid(), holdSec: t.holdSec, done: false }));
+    return entry;
+  }
+
+  // Strength: pre-fill each set with what you lifted last time (progressive
+  // overload starts from your real numbers), unless the plan names a weight.
+  const prevDone = prev?.entry.sets?.filter((s) => s.done) || [];
+  const prevOf = (type) => prevDone.filter((s) => setType(s) === type);
+  const pw = prevOf('work');
+  const at = (list, i) => list[i] || list[list.length - 1];
+  const workWeight = (i) => t.weight || at(pw, i)?.weight || 0;
+  const topWork = t.weight || pw.reduce((m, s) => Math.max(m, s.weight || 0), 0);
+  const step = state.settings?.weightStep || 5;
+  const sets = [];
+  for (let i = 0; i < (t.warmupSets || 0); i++) {
+    sets.push({ id: uid(), type: 'warmup', reps: t.warmupReps || 12, weight: at(prevOf('warmup'), i)?.weight ?? roundToStep(topWork * 0.5, step), done: false });
+  }
+  for (let i = 0; i < t.sets; i++) {
+    // Within a rep range, start from the reps you actually did last time.
+    const last = at(pw, i)?.reps;
+    const reps = t.repScheme ? t.repScheme[Math.min(i, t.repScheme.length - 1)] : t.repsMax && last ? Math.min(t.repsMax, Math.max(t.reps, last)) : t.reps;
+    sets.push({ id: uid(), reps, weight: workWeight(i), done: false });
+  }
+  for (let i = 0; i < (t.dropSets || 0); i++) {
+    sets.push({ id: uid(), type: 'drop', reps: t.repsMax || t.reps, weight: at(prevOf('drop'), i)?.weight ?? roundToStep(topWork * 0.7, step), done: false });
+  }
+  for (let i = 0; i < (t.failureSets || 0); i++) {
+    sets.push({ id: uid(), type: 'failure', reps: t.repScheme ? t.repScheme[t.repScheme.length - 1] : t.reps, weight: at(prevOf('failure'), i)?.weight ?? topWork, done: false });
+  }
+  entry.sets = sets;
+  // Show the real working weight as this day's target.
+  if (!t.weight && topWork) t.weight = topWork;
   return entry;
 }
 
-function pickTarget(kind, t) {
-  const keys = kind === 'cardio' ? ['minutes', 'distance'] : kind === 'vacuum' ? ['sets', 'holdSec'] : ['sets', 'reps', 'weight'];
-  const out = {};
-  for (const k of keys) if (t[k] !== undefined) out[k] = clampNum(t[k]);
-  return out;
-}
-
 /**
- * The session for a date, or an unsaved draft built from the weekly plan.
+ * The session for a date, or an unsaved draft built from the plan.
  * Drafts are not stored until the user changes something, so editing the
  * plan keeps updating every day you haven't started yet.
  */
 export function sessionOrDraft(state, date) {
   const existing = getSession(state, date);
   if (existing) return { session: existing, draft: false };
-  const day = state.plan[weekdayOf(date)];
+  const day = planDay(state, planIndex(state, date));
   const session = {
     date,
-    name: day?.name || '',
-    dayType: day?.dayType || 'training',
+    name: day.name || '',
+    dayType: day.dayType || 'training',
+    note: day.note || '',
     notes: '',
-    entries: (day?.items || []).filter((it) => state.exercises[it.exerciseId] && !state.exercises[it.exerciseId].deleted).map((it) => makeEntry(state, it.exerciseId, it, date)),
+    entries: day.items.filter((it) => state.exercises[it.exerciseId] && !state.exercises[it.exerciseId].deleted).map((it) => makeEntry(state, it.exerciseId, it, date)),
     updatedAt: 0,
   };
   return { session, draft: true };
@@ -399,11 +517,6 @@ export function ensureSession(state, date) {
   return session;
 }
 
-export function touchSession(state, date) {
-  const s = getSession(state, date);
-  if (s) s.updatedAt = now();
-}
-
 /** Throw away a day's log; it falls back to the plan again. */
 export function resetSession(state, date) {
   state.sessions[date] = { date, deleted: true, updatedAt: now() };
@@ -413,42 +526,95 @@ export function findEntry(session, entryId) {
   return session?.entries.find((e) => e.id === entryId) || null;
 }
 
-/** Change an entry's target set count, adding/removing *unfinished* sets to match. */
+export function workingSets(entry) {
+  return (entry.sets || []).filter((s) => setType(s) === 'work');
+}
+
+function newSetLike(entry, like) {
+  if (isHold(entry.kind)) return { id: uid(), holdSec: like?.holdSec ?? entry.target.holdSec ?? 20, done: false };
+  return { id: uid(), reps: like?.reps ?? entry.target.reps ?? 10, weight: like?.weight ?? entry.target.weight ?? 0, done: false };
+}
+
+/** Add a working set (before any drop / failure sets) copying the last one. */
+export function addSet(entry) {
+  if (isHold(entry.kind)) {
+    entry.sets.push(newSetLike(entry, entry.sets[entry.sets.length - 1]));
+    return;
+  }
+  const work = workingSets(entry);
+  const set = newSetLike(entry, work[work.length - 1]);
+  const finisher = entry.sets.findIndex((s) => s.type === 'drop' || s.type === 'failure');
+  if (finisher === -1) entry.sets.push(set);
+  else entry.sets.splice(finisher, 0, set);
+}
+
+/** Remove the last unfinished set (or the last set if all are done). */
+export function removeLastSet(entry) {
+  for (let i = entry.sets.length - 1; i >= 0; i--) {
+    if (!entry.sets[i].done) {
+      entry.sets.splice(i, 1);
+      return;
+    }
+  }
+  entry.sets.pop();
+}
+
+/** Change the number of working sets, never deleting completed work. */
 export function setTargetSets(entry, n) {
   n = Math.round(clampNum(n, 0, 50));
   entry.target.sets = n;
-  while (entry.sets.length < n) addSet(entry);
-  // Only trim sets that haven't been done; never delete logged work.
-  for (let i = entry.sets.length - 1; i >= 0 && entry.sets.length > n; i--) {
-    if (!entry.sets[i].done) entry.sets.splice(i, 1);
+  while (workingSets(entry).length < n) addSet(entry);
+  for (let i = entry.sets.length - 1; i >= 0 && workingSets(entry).length > n; i--) {
+    if (setType(entry.sets[i]) === 'work' && !entry.sets[i].done) entry.sets.splice(i, 1);
   }
 }
 
-export function addSet(entry) {
-  const last = entry.sets[entry.sets.length - 1];
-  if (entry.kind === 'vacuum') {
-    entry.sets.push({ id: uid(), holdSec: last?.holdSec ?? entry.target.holdSec ?? 20, done: false });
-  } else {
-    entry.sets.push({ id: uid(), reps: last?.reps ?? entry.target.reps ?? 10, weight: last?.weight ?? entry.target.weight ?? 0, done: false });
+/** Change how many warm-up / drop / failure sets an entry has. */
+export function setTypedCount(entry, type, n) {
+  n = Math.round(clampNum(n, 0, 10));
+  const key = { warmup: 'warmupSets', drop: 'dropSets', failure: 'failureSets' }[type];
+  entry.target[key] = n;
+  const count = () => entry.sets.filter((s) => s.type === type).length;
+  const work = workingSets(entry);
+  while (count() < n) {
+    const ref = work[work.length - 1];
+    const set = { id: uid(), type, reps: type === 'warmup' ? entry.target.warmupReps || 12 : ref?.reps ?? entry.target.reps ?? 10, weight: ref?.weight ?? entry.target.weight ?? 0, done: false };
+    if (type === 'warmup') set.weight = round((set.weight || 0) * 0.5, 2);
+    if (type === 'drop') set.weight = round((set.weight || 0) * 0.7, 2);
+    if (type === 'warmup') entry.sets.splice(entry.sets.filter((s) => s.type === 'warmup').length, 0, set);
+    else entry.sets.push(set);
+  }
+  for (let i = entry.sets.length - 1; i >= 0 && count() > n; i--) {
+    if (entry.sets[i].type === type && !entry.sets[i].done) entry.sets.splice(i, 1);
   }
 }
 
-export function removeLastSet(entry) {
-  if (entry.sets.length) entry.sets.pop();
+/** Cycle a set through working → warm-up → drop → failure. */
+export function cycleSetType(set) {
+  const next = SET_TYPE_ORDER[(SET_TYPE_ORDER.indexOf(setType(set)) + 1) % SET_TYPE_ORDER.length];
+  if (next === 'work') delete set.type;
+  else set.type = next;
 }
 
-/** "+" on the completed counter: mark the next unfinished set done. */
+export function markSet(set, done, at = now()) {
+  set.done = done;
+  if (done) set.at = at;
+  else delete set.at;
+}
+
+/** "+" on the completed counter: mark the next unfinished set done. Returns the set. */
 export function completeNextSet(entry) {
   if (entry.kind === 'cardio') {
     entry.cardio.done = true;
-    return;
+    return null;
   }
-  const next = entry.sets.find((s) => !s.done);
-  if (next) next.done = true;
-  else {
+  let next = entry.sets.find((s) => !s.done);
+  if (!next) {
     addSet(entry);
-    entry.sets[entry.sets.length - 1].done = true;
+    next = entry.sets.find((s) => !s.done);
   }
+  markSet(next, true);
+  return next;
 }
 
 /** "−" on the completed counter: un-mark the most recently finished set. */
@@ -459,10 +625,22 @@ export function undoLastSet(entry) {
   }
   for (let i = entry.sets.length - 1; i >= 0; i--) {
     if (entry.sets[i].done) {
-      entry.sets[i].done = false;
+      markSet(entry.sets[i], false);
       return;
     }
   }
+}
+
+/** Seconds rested before each set (from completion times within the entry). */
+export function restTaken(entry) {
+  const out = {};
+  let last = null;
+  const done = (entry.sets || []).filter((s) => s.done && s.at).sort((a, b) => a.at - b.at);
+  for (const s of done) {
+    if (last) out[s.id] = Math.round((s.at - last) / 1000);
+    last = s.at;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +657,7 @@ export function e1rm(weight, reps) {
 /**
  * Summary numbers for an entry. With `onlyDone` (the default) only completed
  * sets count, which is what "load" means for history and comparisons.
+ * Warm-up sets never count.
  */
 export function entryMetrics(entry, onlyDone = true) {
   if (!entry) return null;
@@ -487,26 +666,12 @@ export function entryMetrics(entry, onlyDone = true) {
     const counted = !onlyDone || c.done;
     const minutes = counted ? c.minutes || 0 : 0;
     const distance = counted ? c.distance || 0 : 0;
-    return {
-      kind: 'cardio',
-      minutes,
-      distance,
-      calories: counted ? c.calories || 0 : 0,
-      pace: distance > 0 ? round(minutes / distance, 2) : 0,
-      done: !!c.done,
-      load: minutes,
-    };
+    return { kind: 'cardio', minutes, distance, calories: counted ? c.calories || 0 : 0, pace: distance > 0 ? round(minutes / distance, 2) : 0, done: !!c.done, load: minutes };
   }
-  const sets = (entry.sets || []).filter((s) => !onlyDone || s.done);
-  if (entry.kind === 'vacuum') {
+  const sets = (entry.sets || []).filter((s) => (!onlyDone || s.done) && setType(s) !== 'warmup');
+  if (isHold(entry.kind)) {
     const totalHold = sets.reduce((a, s) => a + (s.holdSec || 0), 0);
-    return {
-      kind: 'vacuum',
-      sets: sets.length,
-      totalHold,
-      longestHold: sets.reduce((m, s) => Math.max(m, s.holdSec || 0), 0),
-      load: totalHold,
-    };
+    return { kind: entry.kind, sets: sets.length, totalHold, longestHold: sets.reduce((m, s) => Math.max(m, s.holdSec || 0), 0), load: totalHold };
   }
   let volume = 0;
   let reps = 0;
@@ -518,22 +683,23 @@ export function entryMetrics(entry, onlyDone = true) {
     if (!top || s.weight > top.weight || (s.weight === top.weight && s.reps > top.reps)) top = s;
     best1rm = Math.max(best1rm, e1rm(s.weight, s.reps));
   }
-  return {
-    kind: 'strength',
-    sets: sets.length,
-    reps,
-    volume: round(volume, 1),
-    topWeight: top?.weight || 0,
-    topReps: top?.reps || 0,
-    e1rm: best1rm,
-    load: round(volume, 1),
-  };
+  return { kind: 'strength', sets: sets.length, reps, volume: round(volume, 1), topWeight: top?.weight || 0, topReps: top?.reps || 0, e1rm: best1rm, load: round(volume, 1) };
 }
 
 /** True if an entry has any completed work. */
 export function entryHasWork(entry) {
   if (entry.kind === 'cardio') return !!entry.cardio?.done;
   return (entry.sets || []).some((s) => s.done);
+}
+
+export function entryComplete(entry) {
+  if (entry.kind === 'cardio') return !!entry.cardio?.done;
+  return entry.sets.length > 0 && entry.sets.every((s) => s.done);
+}
+
+/** Optional exercises only count toward a day once you've started them. */
+export function entryCounts(entry) {
+  return !entry.target?.optional || entryHasWork(entry);
 }
 
 /** Sorted (ascending) list of stored session dates. */
@@ -549,16 +715,31 @@ export function previousEntry(state, exerciseId, beforeDate) {
   for (let i = dates.length - 1; i >= 0; i--) {
     const d = dates[i];
     if (d >= beforeDate) continue;
-    const s = state.sessions[d];
     // If the exercise appears twice in one day, use the one with most load.
     let best = null;
-    for (const e of s.entries) {
+    for (const e of state.sessions[d].entries) {
       if (e.exerciseId !== exerciseId || !entryHasWork(e)) continue;
       if (!best || entryMetrics(e).load > entryMetrics(best).load) best = e;
     }
     if (best) return { date: d, entry: best };
   }
   return null;
+}
+
+/**
+ * Progressive-overload nudge: if you hit the top of the rep range on every
+ * working set last time (and it wasn't an all-out effort), suggest more weight.
+ */
+export function overloadHint(state, entry, prev) {
+  if (entry.kind !== 'strength' || !prev || entry.target.repScheme) return null;
+  const top = entry.target.repsMax || entry.target.reps;
+  const pw = workingSets(prev.entry).filter((s) => s.done);
+  if (!top || pw.length < (prev.entry.target.sets || 1)) return null;
+  const maxW = pw.reduce((m, s) => Math.max(m, s.weight || 0), 0);
+  if (!maxW || !pw.every((s) => s.reps >= top) || (prev.entry.rpe && prev.entry.rpe >= 9.5)) return null;
+  const plannedTop = workingSets(entry).reduce((m, s) => Math.max(m, s.weight || 0), 0);
+  if (plannedTop > maxW) return null;
+  return { reps: top, from: maxW, to: round(maxW + (state.settings.weightStep || 5), 2) };
 }
 
 /** Every completed performance of an exercise in [from, to], oldest first. */
@@ -585,22 +766,21 @@ export function loggedExerciseIds(state) {
 /** Status of a day for the calendar strip: 'done' | 'partial' | 'planned' | 'rest' | 'empty'. */
 export function dayStatus(state, date) {
   const s = getSession(state, date);
-  const dayType = s?.dayType || state.plan[weekdayOf(date)]?.dayType || 'training';
+  const day = planDay(state, planIndex(state, date));
+  const dayType = s?.dayType || day.dayType || 'training';
   if (s && s.entries.length) {
-    const total = s.entries.length;
-    const finished = s.entries.filter((e) => (e.kind === 'cardio' ? e.cardio.done : e.sets.length > 0 && e.sets.every((x) => x.done))).length;
-    const any = s.entries.some(entryHasWork);
-    if (finished === total) return 'done';
-    if (any) return 'partial';
+    const counted = s.entries.filter(entryCounts);
+    if (counted.length && counted.every(entryComplete)) return 'done';
+    if (s.entries.some(entryHasWork)) return 'partial';
   }
   if (dayType === 'rest') return 'rest';
-  const planned = s ? s.entries.length : state.plan[weekdayOf(date)]?.items.length;
+  const planned = s ? s.entries.length : day.items.length;
   return planned ? 'planned' : 'empty';
 }
 
 /** Totals over a date range (inclusive). */
 export function rangeSummary(state, from, to) {
-  const sum = { workouts: 0, sets: 0, reps: 0, volume: 0, cardioMin: 0, distance: 0, vacuumSec: 0, vacuumSets: 0 };
+  const sum = { workouts: 0, sets: 0, reps: 0, volume: 0, cardioMin: 0, distance: 0, vacuumSec: 0, vacuumSets: 0, holdSec: 0 };
   for (const d of sessionDates(state)) {
     if (d < from || d > to) continue;
     let worked = false;
@@ -615,9 +795,12 @@ export function rangeSummary(state, from, to) {
       } else if (m.kind === 'cardio') {
         sum.cardioMin += m.minutes;
         sum.distance += m.distance;
-      } else {
+      } else if (m.kind === 'vacuum') {
         sum.vacuumSec += m.totalHold;
         sum.vacuumSets += m.sets;
+      } else {
+        sum.holdSec += m.totalHold;
+        sum.sets += m.sets;
       }
     }
     if (worked) sum.workouts++;
@@ -637,28 +820,37 @@ export function weeklySummaries(state, from, to, weekStart = 1) {
 }
 
 // ---------------------------------------------------------------------------
-// Plan helpers
+// Body weight (daily scale weight)
 // ---------------------------------------------------------------------------
 
-/** Copy a session's exercises and targets into the weekly plan for that weekday. */
-export function saveSessionAsPlan(state, date) {
-  const s = getSession(state, date) || sessionOrDraft(state, date).session;
-  state.plan[weekdayOf(date)] = {
-    name: s.name,
-    dayType: s.dayType,
-    items: s.entries.map((e) => ({ id: uid(), exerciseId: e.exerciseId, ...clone(e.target) })),
-    updatedAt: now(),
-  };
+export function setBodyWeight(state, date, weight) {
+  state.body[date] = { weight: round(clampNum(weight, 0, 2000), 2), updatedAt: now() };
 }
 
-export function copyPlanDay(state, fromWd, toWd) {
-  const src = state.plan[fromWd];
-  state.plan[toWd] = {
-    name: src.name,
-    dayType: src.dayType,
-    items: src.items.map((it) => ({ ...clone(it), id: uid() })),
-    updatedAt: now(),
-  };
+/** Weigh-ins in [from, to], oldest first. A weight of 0 means "cleared". */
+export function bodyWeights(state, from = '0000-01-01', to = '9999-12-31') {
+  return Object.entries(state.body)
+    .filter(([d, b]) => b.weight > 0 && d >= from && d <= to)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([date, b]) => ({ date, weight: b.weight }));
+}
+
+export function bodyWeightOn(state, date) {
+  const b = state.body[date];
+  return b && b.weight > 0 ? b.weight : 0;
+}
+
+/** Last weigh-in strictly before a date. */
+export function previousBodyWeight(state, date) {
+  const list = bodyWeights(state, '0000-01-01', addDays(date, -1));
+  return list[list.length - 1] || null;
+}
+
+/** Average of weigh-ins in the `days` days ending on `date`. */
+export function bodyWeightAverage(state, date, days = 7) {
+  const list = bodyWeights(state, addDays(date, -(days - 1)), date);
+  if (!list.length) return 0;
+  return round(list.reduce((a, b) => a + b.weight, 0) / list.length, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -670,22 +862,25 @@ function csvCell(v) {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-/** One row per logged set / cardio session, for spreadsheets. */
+/** One row per logged set / cardio session / weigh-in, for spreadsheets. */
 export function toCSV(state) {
-  const rows = [['date', 'day', 'exercise', 'type', 'set', 'weight', 'reps', 'hold_sec', 'minutes', 'distance', 'calories', 'avg_hr', 'done', `unit=${state.settings.unit}`]];
+  const rows = [['date', 'day', 'exercise', 'type', 'set', 'set_type', 'weight', 'reps', 'hold_sec', 'minutes', 'distance', 'calories', 'avg_hr', 'rpe', 'done', `unit=${state.settings.unit}`]];
   for (const d of sessionDates(state)) {
     const s = state.sessions[d];
     for (const e of s.entries) {
       const name = exerciseName(state, e.exerciseId);
+      const rpe = e.rpe || '';
       if (e.kind === 'cardio') {
         const c = e.cardio;
-        rows.push([d, s.name, name, 'cardio', 1, '', '', '', c.minutes, c.distance, c.calories, c.avgHr, c.done ? 1 : 0]);
+        rows.push([d, s.name, name, 'cardio', 1, '', '', '', '', c.minutes, c.distance, c.calories, c.avgHr, rpe, c.done ? 1 : 0]);
       } else {
         e.sets.forEach((x, i) => {
-          rows.push([d, s.name, name, e.kind, i + 1, e.kind === 'strength' ? x.weight : '', e.kind === 'strength' ? x.reps : '', e.kind === 'vacuum' ? x.holdSec : '', '', '', '', '', x.done ? 1 : 0]);
+          const hold = isHold(e.kind);
+          rows.push([d, s.name, name, e.kind, i + 1, hold ? '' : setType(x), hold ? '' : x.weight, hold ? '' : x.reps, hold ? x.holdSec : '', '', '', '', '', rpe, x.done ? 1 : 0]);
         });
       }
     }
   }
+  for (const b of bodyWeights(state)) rows.push([b.date, '', 'Body weight', 'bodyweight', '', '', b.weight, '', '', '', '', '', '', '', 1]);
   return rows.map((r) => r.map(csvCell).join(',')).join('\n') + '\n';
 }
