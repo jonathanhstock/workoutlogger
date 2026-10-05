@@ -298,7 +298,7 @@ describe('workout logbook in the browser', () => {
     await shot(page, '04-plan');
 
     // Day 4 this week (Thursday Oct 8) follows the new plan.
-    await page.getByRole('button', { name: 'Log' }).click();
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
     await page.locator('.weekstrip button').nth(3).click();
     assert.equal(await page.locator('.dayname').inputValue(), 'Recovery');
     await card(page, 'Lying Flutter Kicks').locator('.cue', { hasText: 'Slow and controlled' }).waitFor();
@@ -355,6 +355,36 @@ describe('workout logbook in the browser', () => {
     await context.setOffline(false);
     await page.evaluate(() => window.logbook.store.sync());
     await serverHas(page, (s) => todayEntry(s, 'flat-press').sets.filter((x) => x.done).length === 4);
+    await context.close();
+  });
+
+  test('pull down to sync, and the logo goes to today', async () => {
+    const { context, page, errors } = await openApp();
+    // A short pull does nothing; a long one syncs.
+    const drag = (dy) =>
+      page.evaluate((dy) => {
+        const t = (y) => new Touch({ identifier: 1, target: document.body, clientX: 180, clientY: y });
+        const fire = (type, y) => document.dispatchEvent(new TouchEvent(type, { touches: type === 'touchend' ? [] : [t(y)], changedTouches: [t(y)], bubbles: true }));
+        fire('touchstart', 120);
+        for (let y = 120; y <= 120 + dy; y += 20) fire('touchmove', y);
+        fire('touchend', 120 + dy);
+      }, dy);
+    let puts = 0;
+    page.on('request', (r) => r.method() === 'PUT' && r.url().endsWith('/api/state') && puts++);
+    await drag(60);
+    await page.waitForTimeout(200);
+    assert.equal(puts, 0);
+    await drag(220);
+    await page.locator('#toast', { hasText: 'Synced' }).waitFor();
+    assert.equal(puts, 1);
+
+    // Tapping "Logbook" returns to today's log from anywhere.
+    await page.getByRole('button', { name: 'Next day' }).click();
+    await page.getByRole('button', { name: 'Plan', exact: true }).click();
+    await page.getByRole('button', { name: /Logbook: go to today/ }).click();
+    await page.locator('.today-pill').waitFor();
+    assert.equal(await page.locator('.tabbar [aria-current="page"]').textContent().then((t) => t.trim()), 'Log');
+    assert.deepEqual(errors, []);
     await context.close();
   });
 

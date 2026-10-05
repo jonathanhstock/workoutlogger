@@ -1572,8 +1572,13 @@ const ACTIONS = {
   'set-weekstart': (el) => updateSettings({ weekStart: Number(el.dataset.value) }),
   'set-autorest': (el) => updateSettings({ autoRest: el.dataset.value === 'true' }),
   'set-restsound': (el) => updateSettings({ restSound: el.dataset.value === 'true' }),
-  'sync-now'() {
-    store.sync();
+  'sync-now': () => syncNow(),
+  'go-home'() {
+    closeSheet();
+    ui.tab = 'log';
+    history.replaceState(null, '', '#log');
+    goDate(M.todayISO());
+    window.scrollTo(0, 0);
   },
   'export-json'() {
     download(`logbook-backup-${M.todayISO()}.json`, JSON.stringify(S(), null, 2), 'application/json');
@@ -1848,6 +1853,82 @@ document.addEventListener(
   },
   { passive: false },
 );
+
+// ---------------------------------------------------------------------------
+// Manual sync (Synced button and pull-to-sync)
+// ---------------------------------------------------------------------------
+
+let manualSync = null;
+function syncNow() {
+  if (manualSync) return manualSync;
+  manualSync = store.syncNow().then(() => {
+    manualSync = null;
+    const msg = { synced: 'Synced', offline: "Couldn't reach the server. Saved on this device.", auth: 'Enter your password in Settings to sync', local: 'No server: data is saved on this device only' }[store.status];
+    if (msg) toast(msg);
+  });
+  return manualSync;
+}
+
+// Pull down from the top of the page to sync, like a native app.
+const $ptr = document.getElementById('ptr');
+const PULL_TRIGGER = 70; // px of (damped) pull needed to sync
+let pull = null;
+
+function showPull(dist, state) {
+  $ptr.classList.toggle('is-ready', state === 'ready');
+  $ptr.classList.toggle('is-syncing', state === 'syncing');
+  $ptr.querySelector('.ptr-text').textContent = state === 'syncing' ? 'Syncing…' : state === 'ready' ? 'Release to sync' : 'Pull to sync';
+  $ptr.querySelector('.ptr-icon').style.transform = state === 'syncing' ? '' : `rotate(${dist * 3}deg)`;
+  $ptr.style.opacity = String(Math.min(1, dist / 40));
+  $ptr.style.transform = `translate(-50%, ${Math.min(dist, 90) - 80}px)`;
+}
+
+function hidePull() {
+  $ptr.classList.add('is-animating');
+  showPull(0, '');
+  setTimeout(() => $ptr.classList.remove('is-animating'), 220);
+}
+
+document.addEventListener(
+  'touchstart',
+  (ev) => {
+    if (ev.touches.length !== 1 || window.scrollY > 0 || ui.sheet || manualSync) return;
+    pull = { y0: ev.touches[0].clientY, dist: 0 };
+    $ptr.classList.remove('is-animating');
+  },
+  { passive: true },
+);
+document.addEventListener(
+  'touchmove',
+  (ev) => {
+    if (!pull) return;
+    if (ev.touches.length !== 1 || window.scrollY > 0) {
+      pull = null;
+      hidePull();
+      return;
+    }
+    // Damped so it feels like a rubber band.
+    pull.dist = Math.max(0, (ev.touches[0].clientY - pull.y0) * 0.5);
+    showPull(pull.dist, pull.dist >= PULL_TRIGGER ? 'ready' : '');
+  },
+  { passive: true },
+);
+document.addEventListener('touchend', () => {
+  if (!pull) return;
+  const go = pull.dist >= PULL_TRIGGER;
+  pull = null;
+  if (!go) return hidePull();
+  $ptr.classList.add('is-animating');
+  showPull(PULL_TRIGGER, 'syncing');
+  vibrate(10);
+  syncNow().finally(hidePull);
+});
+document.addEventListener('touchcancel', () => {
+  if (pull) {
+    pull = null;
+    hidePull();
+  }
+});
 
 // Pull changes from other devices when coming back to the app.
 document.addEventListener('visibilitychange', () => {

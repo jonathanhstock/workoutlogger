@@ -138,7 +138,27 @@ h3 { font-size: 16px; font-weight: 650; }
   -webkit-backdrop-filter: saturate(1.4) blur(12px);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; letter-spacing: -.01em; }
+.brand {
+  display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; letter-spacing: -.01em;
+  border: 0; background: none; padding: 6px 8px; margin: -6px -8px; border-radius: 10px; color: var(--text);
+}
+.brand:active { background: var(--surface-2); }
+
+/* Pull to sync: the browser's own pull/bounce is turned off so ours shows. */
+html, body { overscroll-behavior-y: none; }
+.ptr {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 56px); z-index: 25;
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,.15);
+  font-size: 13px; font-weight: 600; color: var(--text-2);
+  transform: translate(-50%, -80px); opacity: 0; pointer-events: none;
+}
+.ptr.is-animating { transition: transform .2s ease, opacity .2s ease; }
+.ptr-icon { width: 18px; height: 18px; display: grid; place-items: center; color: var(--accent); }
+.ptr-icon svg { width: 18px; height: 18px; }
+.ptr.is-ready { color: var(--accent); }
+.ptr.is-syncing .ptr-icon { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .brand svg { width: 24px; height: 24px; color: var(--accent); }
 .sync {
   display: flex; align-items: center; gap: 6px;
