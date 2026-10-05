@@ -301,5 +301,16 @@ export async function createStore({ onChange, onSyncStatus }) {
       return this.init();
     },
     hasPassword: () => !!password(),
+    /** Call another server endpoint (e.g. api/google/status) with the password. */
+    async request(path, { method = 'GET', body } = {}) {
+      const headers = { Accept: 'application/json' };
+      const pw = password();
+      if (pw) headers.Authorization = `Bearer ${pw}`;
+      if (body) headers['Content-Type'] = 'application/json';
+      const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw Object.assign(new Error(data.error || `Server error ${res.status}`), { status: res.status, data });
+      return data;
+    },
   };
 }

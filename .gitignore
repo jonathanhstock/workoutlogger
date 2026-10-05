@@ -2,3 +2,5 @@ node_modules/
 data/
 *.tmp
 test-results/
+credentials*.json
+client_secret*.json

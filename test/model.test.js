@@ -667,3 +667,37 @@ describe('bug fixes and speed-ups', () => {
     assert.equal(M.bodyWeights(s, M.addDays(D1, -6), D1).length, 3);
   });
 });
+
+describe('Fitbit import', () => {
+  test('adds health days, clears what Google no longer has, and stays quiet when unchanged', () => {
+    const s = fresh();
+    const acts = [{ name: 'Walk', start: '07:00', minutes: 30, calories: 150, avgHr: 100, distanceKm: 2.5, steps: 3000 }];
+    assert.equal(M.applyHealthImport(s, { days: { [D1]: { steps: 8000, restingHr: 58, sleepMin: 420, activities: acts }, '2026-10-06': { steps: 0, activities: [] } } }, 100), 1);
+    assert.equal(s.health[D1].steps, 8000);
+    assert.equal(s.health['2026-10-06'], undefined, 'no empty records');
+    assert.equal(M.applyHealthImport(s, { days: { [D1]: { steps: 8000, restingHr: 58, sleepMin: 420, activities: acts } } }, 200), 0);
+    assert.equal(s.health[D1].updatedAt, 100);
+    // A partial import (sleep failed) keeps the fields it didn't fetch.
+    M.applyHealthImport(s, { days: { [D1]: { steps: 9000, activities: [] } } }, 300);
+    assert.deepEqual([s.health[D1].steps, s.health[D1].sleepMin, s.health[D1].activities], [9000, 420, undefined]);
+    // Survives normalize and merges like any other record.
+    const n = M.normalizeState(JSON.parse(JSON.stringify(s)));
+    assert.equal(n.health[D1].steps, 9000);
+    assert.equal(M.mergeStates(n, M.defaultState(0)).health[D1].steps, 9000);
+  });
+
+  test('weigh-ins use your unit and never replace one you typed', () => {
+    const s = fresh();
+    M.setBodyWeight(s, D1, 175);
+    M.applyHealthImport(s, { weights: { [D1]: 80000, '2026-10-04': 80000 } });
+    assert.equal(M.bodyWeightOn(s, D1), 175);
+    assert.deepEqual([s.body['2026-10-04'].weight, s.body['2026-10-04'].source], [176.4, 'fitbit']);
+    s.settings.unit = 'kg';
+    M.applyHealthImport(s, { weights: { '2026-10-04': 80000 } });
+    assert.equal(s.body['2026-10-04'].weight, 80);
+    // Typing over a Fitbit weigh-in makes it yours.
+    M.setBodyWeight(s, '2026-10-04', 79.5);
+    M.applyHealthImport(s, { weights: { '2026-10-04': 81000 } });
+    assert.equal(M.bodyWeightOn(s, '2026-10-04'), 79.5);
+  });
+});

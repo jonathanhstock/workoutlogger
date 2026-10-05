@@ -517,6 +517,24 @@ describe('workout logbook in the browser', () => {
     await context.close();
   });
 
+  test('shows Fitbit data on the log and how to connect in Settings', async () => {
+    const s = await serverState();
+    s.health = { [TODAY]: { steps: 10234, restingHr: 56, sleepMin: 452, activities: [{ name: 'Weights', start: '07:05', minutes: 52, calories: 410, avgHr: 121, distanceKm: 0, steps: 0 }], updatedAt: Date.now() } };
+    await fetch(`${base}/api/state`, { method: 'PUT', body: JSON.stringify(s) });
+    const { context, page, errors } = await openApp();
+    const fit = page.locator('section.health');
+    await fit.locator('.stat', { hasText: '10,234' }).waitFor();
+    await fit.locator('.stat', { hasText: '7h 32m' }).waitFor();
+    await fit.locator('li', { hasText: 'Weights' }).waitFor();
+    await noHorizontalScroll(page);
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.locator('#google-card', { hasText: 'GOOGLE_CLIENT_ID' }).waitFor();
+    await page.locator('#google-card code', { hasText: '/api/google/callback' }).waitFor();
+    await noHorizontalScroll(page);
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
   test('pull down to sync, and the logo goes to today', async () => {
     const { context, page, errors } = await openApp();
     // A short pull does nothing; a long one syncs.

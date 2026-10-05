@@ -13,7 +13,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { defaultState, mergeStates, normalizeState, statesEqual } from './public/js/model.js';
+import { applyHealthImport, defaultState, mergeStates, normalizeState, statesEqual } from './public/js/model.js';
+import { createGoogleHealth } from './google-health.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -35,7 +36,7 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-export function createServer({ dataDir = path.join(ROOT, 'data'), password = '', trustProxy = false } = {}) {
+export function createServer({ dataDir = path.join(ROOT, 'data'), password = '', trustProxy = false, google: googleOpts = {} } = {}) {
   const dbFile = path.join(dataDir, 'logbook.json');
   const backupDir = path.join(dataDir, 'backups');
   fs.mkdirSync(backupDir, { recursive: true });
@@ -72,6 +73,42 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
     return write;
   }
 
+  const google = createGoogleHealth({ dataDir, ...googleOpts });
+
+  /** Pull Fitbit / Google Health data into the logbook. */
+  async function importHealth(opts) {
+    const result = await google.sync(opts);
+    if (!result) return 0;
+    if (result.errors.length) console.error('Google Health import:', result.errors.join(' · '));
+    const next = structuredClone(state);
+    const changed = applyHealthImport(next, result);
+    if (changed) await save(next);
+    return changed;
+  }
+
+  async function handleGoogle(req, res, url) {
+    const route = url.pathname.slice('/api/google/'.length);
+    if (route === 'status' && req.method === 'GET') return sendJson(res, 200, google.status(req));
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
+    if (route === 'connect') return sendJson(res, 200, { url: google.connectUrl(req) });
+    if (route === 'disconnect') {
+      await google.disconnect();
+      return sendJson(res, 200, google.status(req));
+    }
+    if (route === 'sync') {
+      let opts = {};
+      try {
+        opts = JSON.parse((await readBody(req)) || '{}');
+      } catch {
+        /* defaults */
+      }
+      const today = /^\d{4}-\d{2}-\d{2}$/.test(opts.today) ? opts.today : undefined;
+      const changed = await importHealth({ force: !!opts.force, today });
+      return sendJson(res, 200, { ...google.status(req), changed });
+    }
+    return sendJson(res, 404, { error: 'Not found' });
+  }
+
   // Slow down password guessing: after too many failures from one address,
   // refuse further attempts for a while.
   const failures = new Map(); // ip -> { count, first, until }
@@ -87,6 +124,19 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
 
   async function handleApi(req, res, url) {
     if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, auth: !!password });
+    // Google sends the browser back here after sign-in. It can't carry the
+    // app password; the one-time `state` it returns proves we started it.
+    if (url.pathname === '/api/google/callback') {
+      let to = '/?google=connected#settings';
+      try {
+        await google.finishConnect(req, url);
+        importHealth({ force: true }).catch((err) => console.error('Google Health import failed', err));
+      } catch (err) {
+        to = `/?google=error&reason=${encodeURIComponent(err.message)}#settings`;
+      }
+      res.writeHead(302, { Location: to, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     const ip = clientIp(req);
     const f = failures.get(ip);
     if (f && f.until > Date.now()) return sendJson(res, 429, { error: 'Too many attempts. Try again later.' });
@@ -99,6 +149,14 @@ export function createServer({ dataDir = path.join(ROOT, 'data'), password = '',
       return sendJson(res, 401, { error: 'Password required' });
     }
     if (f) failures.delete(ip);
+
+    if (url.pathname.startsWith('/api/google/')) {
+      try {
+        return await handleGoogle(req, res, url);
+      } catch (err) {
+        return sendJson(res, err.status || 502, { error: err.message, ...google.status(req) });
+      }
+    }
 
     if (url.pathname === '/api/state') {
       if (req.method === 'GET') return sendJson(res, 200, state, req);
@@ -272,6 +330,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const server = createServer({
     dataDir: process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : undefined,
     password: process.env.APP_PASSWORD || '',
+    google: {
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+      // Render sets RENDER_EXTERNAL_URL to the app's public address.
+      publicUrl: process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '',
+    },
     // Hosts like Render put the real client address in X-Forwarded-For.
     trustProxy: process.env.TRUST_PROXY === '1' || !!process.env.RENDER,
   });

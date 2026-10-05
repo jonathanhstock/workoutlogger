@@ -188,6 +188,7 @@ export function defaultState(ts = now()) {
     plan: defaultPlan(ts),
     sessions: {},
     body: {},
+    health: {},
   };
 }
 
@@ -254,6 +255,7 @@ export function normalizeState(input) {
     plan: {},
     sessions: {},
     body: {},
+    health: {},
   };
 
   const needDefaults = !isObj(input.exercises) || !isObj(input.plan);
@@ -320,8 +322,38 @@ export function normalizeState(input) {
   const body = isObj(input.body) ? input.body : {};
   for (const [date, b] of Object.entries(body)) {
     if (!isISODate(date) || !isObj(b)) continue;
-    out.body[date] = { weight: round(clampNum(b.weight, 0, 2000), 2), updatedAt: Number(b.updatedAt) || 0 };
+    out.body[date] = { weight: round(clampNum(b.weight, 0, 2000), 2), ...(b.source === 'fitbit' ? { source: 'fitbit' } : {}), updatedAt: Number(b.updatedAt) || 0 };
   }
+
+  const health = isObj(input.health) ? input.health : {};
+  for (const [date, h] of Object.entries(health)) {
+    if (isISODate(date) && isObj(h)) out.health[date] = normalizeHealth(h);
+  }
+  return out;
+}
+
+/** A day of Fitbit / Google Health data (imported by the server). */
+function normalizeHealth(h) {
+  const out = {};
+  const int = (v, max) => Math.round(clampNum(v, 0, max));
+  if (h.steps) out.steps = int(h.steps, 1000000);
+  if (h.restingHr) out.restingHr = int(h.restingHr, 260);
+  if (h.sleepMin) out.sleepMin = int(h.sleepMin, 1440);
+  if (Array.isArray(h.activities) && h.activities.length) {
+    out.activities = h.activities
+      .filter(isObj)
+      .slice(0, 20)
+      .map((a) => ({
+        name: String(a.name || 'Activity').slice(0, 60),
+        start: /^\d\d:\d\d$/.test(a.start) ? a.start : '',
+        minutes: round(clampNum(a.minutes, 0, 1440), 1),
+        calories: int(a.calories, 100000),
+        avgHr: int(a.avgHr, 260),
+        distanceKm: round(clampNum(a.distanceKm, 0, 10000), 2),
+        steps: int(a.steps, 1000000),
+      }));
+  }
+  out.updatedAt = Number(h.updatedAt) || 0;
   return out;
 }
 
@@ -399,6 +431,7 @@ export function mergeStates(a, b) {
     plan: mergeMap(a.plan, b.plan),
     sessions: mergeMap(a.sessions, b.sessions),
     body: mergeMap(a.body, b.body),
+    health: mergeMap(a.health, b.health),
   };
 }
 
@@ -425,6 +458,7 @@ export function eraseAll(state, t = now()) {
   for (const day of Object.values(fresh.plan)) stamp(day, t);
   for (const d of Object.keys(state.sessions)) fresh.sessions[d] = { date: d, deleted: true, updatedAt: t };
   for (const d of Object.keys(state.body)) fresh.body[d] = { weight: 0, updatedAt: t };
+  for (const d of Object.keys(state.health || {})) fresh.health[d] = { updatedAt: t };
   for (const [id, ex] of Object.entries(state.exercises)) if (!fresh.exercises[id]) fresh.exercises[id] = { ...ex, deleted: true, updatedAt: t };
   Object.assign(state, fresh);
   return state;
@@ -1044,6 +1078,45 @@ export function bodyWeightAverage(state, date, days = 7) {
   const list = bodyWeights(state, addDays(date, -(days - 1)), date);
   if (!list.length) return 0;
   return round(list.reduce((a, b) => a + b.weight, 0) / list.length, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Fitbit / Google Health import
+// ---------------------------------------------------------------------------
+
+const GRAMS = { lb: 453.59237, kg: 1000 };
+
+/**
+ * Merge imported health data into the logbook. `days` maps a date to
+ * { steps, restingHr, sleepMin, activities }; `weights` maps a date to grams.
+ * A day is only re-stamped when its data changed (so syncs stay quiet), and a
+ * Fitbit weigh-in never replaces one you typed in yourself.
+ * Returns how many records changed.
+ */
+export function applyHealthImport(state, { days = {}, weights = {} }, t = now()) {
+  let changed = 0;
+  state.health ||= {};
+  for (const [date, data] of Object.entries(days)) {
+    if (!isISODate(date)) continue;
+    const old = state.health[date];
+    const next = normalizeHealth({ ...(old && !old.deleted ? old : {}), ...data, updatedAt: t });
+    const same = old ? statesEqual({ ...old, updatedAt: 0 }, { ...next, updatedAt: 0 }) : Object.keys(next).length === 1;
+    if (!same) {
+      state.health[date] = next;
+      changed++;
+    }
+  }
+  const per = GRAMS[state.settings.unit] || GRAMS.lb;
+  for (const [date, grams] of Object.entries(weights)) {
+    if (!isISODate(date) || !(grams > 0)) continue;
+    const cur = state.body[date];
+    if (cur && cur.weight > 0 && cur.source !== 'fitbit') continue;
+    const weight = round(grams / per, 1);
+    if (cur && cur.source === 'fitbit' && cur.weight === weight) continue;
+    state.body[date] = { weight, source: 'fitbit', updatedAt: t };
+    changed++;
+  }
+  return changed;
 }
 
 // ---------------------------------------------------------------------------

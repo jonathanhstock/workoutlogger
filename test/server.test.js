@@ -228,3 +228,148 @@ describe('saving', () => {
     ctx.server.close();
   });
 });
+
+describe('Fitbit / Google Health', () => {
+  const TODAY = '2026-10-05';
+  const date = (d) => {
+    const [year, month, day] = d.split('-').map(Number);
+    return { year, month, day };
+  };
+
+  function fakeGoogle({ expired = false } = {}) {
+    const calls = [];
+    const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const fetch = async (url, opts = {}) => {
+      const u = new URL(url);
+      const body = typeof opts.body === 'string' ? opts.body : opts.body?.toString();
+      calls.push({ url: u, method: opts.method || 'GET', body, auth: opts.headers?.Authorization });
+      if (u.href.startsWith('https://oauth2.googleapis.com/token')) {
+        const p = new URLSearchParams(body);
+        if (p.get('grant_type') === 'authorization_code') return json({ access_token: 'at1', refresh_token: 'rt-secret', expires_in: 3600, scope: 'x' });
+        if (expired) return json({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }, 400);
+        return json({ access_token: 'at2', expires_in: 3600 });
+      }
+      if (u.href.startsWith('https://oauth2.googleapis.com/revoke')) return json({});
+      const type = u.pathname.split('/dataTypes/')[1]?.split('/')[0];
+      if (type === 'steps') return json({ rollupDataPoints: [{ civilStartTime: { date: date('2026-10-04') }, steps: { countSum: '9876' } }] });
+      if (type === 'daily-resting-heart-rate') return json({ dataPoints: [{ dailyRestingHeartRate: { date: date('2026-10-04'), beatsPerMinute: '57' } }] });
+      if (type === 'sleep') {
+        // Two pages, to check paging; a nap doesn't count.
+        if (!u.searchParams.get('pageToken')) return json({ dataPoints: [{ sleep: { interval: { civilEndTime: { date: date('2026-10-04') } }, summary: { minutesAsleep: '400' }, metadata: {} } }], nextPageToken: 'p2' });
+        return json({ dataPoints: [{ sleep: { interval: { civilEndTime: { date: date('2026-10-04') } }, summary: { minutesAsleep: '30' }, metadata: { nap: true } } }] });
+      }
+      if (type === 'weight') {
+        return json({
+          dataPoints: [
+            { weight: { weightGrams: 81646.6, sampleTime: { physicalTime: '2026-10-04T14:00:00Z', civilTime: { date: date('2026-10-04') } } } },
+            { weight: { weightGrams: 81000, sampleTime: { physicalTime: '2026-10-04T07:00:00Z', civilTime: { date: date('2026-10-04') } } } },
+            { weight: { weightGrams: 80000, sampleTime: { physicalTime: '2026-10-03T07:00:00Z', civilTime: { date: date('2026-10-03') } } } },
+          ],
+        });
+      }
+      if (type === 'exercise') {
+        return json({
+          dataPoints: [
+            {
+              exercise: {
+                displayName: 'Weights',
+                exerciseType: 'WEIGHTLIFTING',
+                activeDuration: '3120s',
+                interval: { startTime: '2026-10-04T13:05:00Z', endTime: '2026-10-04T14:00:00Z', civilStartTime: { date: date('2026-10-04'), time: { hours: 7, minutes: 5 } } },
+                metricsSummary: { caloriesKcal: 410.4, averageHeartRateBeatsPerMinute: '121' },
+              },
+            },
+          ],
+        });
+      }
+      return json({ error: { message: 'unexpected' } }, 404);
+    };
+    return { fetch, calls };
+  }
+
+  test('connect, import and disconnect', async () => {
+    const dir = tmpDir();
+    const g = fakeGoogle();
+    // A weigh-in typed by hand is never replaced by Fitbit's.
+    const seed = defaultState(1);
+    seed.body['2026-10-03'] = { weight: 177, updatedAt: 5 };
+    fs.writeFileSync(path.join(dir, 'logbook.json'), JSON.stringify(seed));
+    const ctx = await start({ dataDir: dir, password: 'pw', google: { clientId: 'cid', clientSecret: 'csec', publicUrl: 'https://app.example/', fetch: g.fetch } });
+    const auth = { Authorization: 'Bearer pw' };
+    try {
+      let st = await (await fetch(`${ctx.base}/api/google/status`, { headers: auth })).json();
+      assert.deepEqual([st.configured, st.connected, st.redirectUri], [true, false, 'https://app.example/api/google/callback']);
+      assert.equal((await fetch(`${ctx.base}/api/google/connect`, { method: 'POST' })).status, 401);
+
+      const { url } = await (await fetch(`${ctx.base}/api/google/connect`, { method: 'POST', headers: auth })).json();
+      const auth1 = new URL(url);
+      assert.equal(auth1.origin, 'https://accounts.google.com');
+      assert.equal(auth1.searchParams.get('access_type'), 'offline');
+      assert.match(auth1.searchParams.get('scope'), /googlehealth\.sleep\.readonly/);
+      const state = auth1.searchParams.get('state');
+
+      // A made-up state is refused.
+      let res = await fetch(`${ctx.base}/api/google/callback?state=nope&code=x`, { redirect: 'manual' });
+      assert.match(res.headers.get('location'), /google=error/);
+
+      res = await fetch(`${ctx.base}/api/google/callback?state=${state}&code=the-code`, { redirect: 'manual' });
+      assert.equal(res.status, 302);
+      assert.equal(res.headers.get('location'), '/?google=connected#settings');
+      const tokenCall = g.calls.find((c) => c.url.pathname === '/token');
+      assert.equal(new URLSearchParams(tokenCall.body).get('code'), 'the-code');
+      assert.equal(new URLSearchParams(tokenCall.body).get('redirect_uri'), 'https://app.example/api/google/callback');
+      // The state can't be reused.
+      res = await fetch(`${ctx.base}/api/google/callback?state=${state}&code=again`, { redirect: 'manual' });
+      assert.match(res.headers.get('location'), /google=error/);
+
+      res = await fetch(`${ctx.base}/api/google/sync`, { method: 'POST', headers: auth, body: JSON.stringify({ force: true, today: TODAY }) });
+      st = await res.json();
+      assert.equal(st.connected, true);
+      assert.equal(st.lastError, '');
+      assert.ok(!JSON.stringify(st).includes('rt-secret'));
+
+      const s = await (await fetch(`${ctx.base}/api/state`, { headers: auth })).json();
+      assert.ok(!JSON.stringify(s).includes('rt-secret'), 'tokens never reach the logbook');
+      const h = s.health['2026-10-04'];
+      assert.equal(h.steps, 9876);
+      assert.equal(h.restingHr, 57);
+      assert.equal(h.sleepMin, 400);
+      assert.deepEqual(h.activities, [{ name: 'Weights', start: '07:05', minutes: 52, calories: 410, avgHr: 121, distanceKm: 0, steps: 0 }]);
+      assert.deepEqual(s.body['2026-10-04'], { weight: 180, source: 'fitbit', updatedAt: s.body['2026-10-04'].updatedAt });
+      assert.equal(s.body['2026-10-03'].weight, 177);
+      assert.ok(fs.statSync(path.join(dir, 'google.json')).isFile());
+
+      // A second import with the same data changes nothing.
+      res = await fetch(`${ctx.base}/api/google/sync`, { method: 'POST', headers: auth, body: JSON.stringify({ force: true, today: TODAY }) });
+      assert.equal((await res.json()).changed, 0);
+
+      res = await fetch(`${ctx.base}/api/google/disconnect`, { method: 'POST', headers: auth });
+      assert.equal((await res.json()).connected, false);
+      assert.ok(g.calls.some((c) => c.url.pathname === '/revoke'));
+      assert.ok(!fs.existsSync(path.join(dir, 'google.json')));
+    } finally {
+      ctx.server.close();
+    }
+  });
+
+  test('an expired Google sign-in asks to reconnect', async () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'google.json'), JSON.stringify({ refreshToken: 'old', connectedAt: 1, lastSync: 0 }));
+    const g = fakeGoogle({ expired: true });
+    const ctx = await start({ dataDir: dir, google: { clientId: 'cid', clientSecret: 'csec', fetch: g.fetch } });
+    const res = await fetch(`${ctx.base}/api/google/sync`, { method: 'POST', body: JSON.stringify({ force: true }) });
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.equal(body.needsReconnect, true);
+    assert.match(body.lastError, /Connect/);
+    ctx.server.close();
+  });
+
+  test('without credentials it reports not configured', async () => {
+    const ctx = await start({ dataDir: tmpDir() });
+    const st = await (await fetch(`${ctx.base}/api/google/status`)).json();
+    assert.equal(st.configured, false);
+    assert.equal((await fetch(`${ctx.base}/api/google/connect`, { method: 'POST' })).status, 400);
+    ctx.server.close();
+  });
+});

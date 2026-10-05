@@ -423,6 +423,17 @@ button.idx:hover { background: var(--surface-2); }
 .bw-icon svg { width: 20px; height: 20px; }
 .bw-input { display: flex; align-items: center; gap: 6px; }
 .bw-input .stepper { width: 150px; }
+
+/* Fitbit data on the log */
+.health { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+.health .stats { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
+.health .stat { padding: 8px 10px; box-shadow: none; background: var(--surface-2); border-color: transparent; border-radius: var(--radius-sm); }
+.health .stat .v { font-size: 18px; }
+.health .stat small { font-size: 12px; font-weight: 600; color: var(--muted); }
+.health-acts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.health-acts li { overflow-wrap: anywhere; }
+code.copy { display: block; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13px; overflow-wrap: anywhere; word-break: break-all; user-select: all; }
+.hint.warn { color: var(--bad); }
 .delta.down-good { color: var(--good); }
 .delta.up-neutral { color: var(--text-2); }
 

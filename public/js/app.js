@@ -566,8 +566,33 @@ function bodyWeightCard() {
   const diffHTML = diff === null ? '' : diff === 0 ? '<span class="delta flat">no change</span>' : `<span class="delta ${diff < 0 ? 'down-good' : 'up-neutral'}">${diff > 0 ? '+' : ''}${nf1.format(diff)} ${unit()}</span>`;
   return `<section class="card bw">
     <div class="bw-head"><span class="bw-icon">${ICON.scale}</span><div><div class="label">Scale weight</div>
-      <div class="small muted">${diffHTML ? `${diffHTML} vs ${fmtDate(prev.date, { month: 'short', day: 'numeric' })} · ` : ''}7-day avg <b class="num">${nf1.format(avg)}</b></div></div></div>
+      <div class="small muted">${diffHTML ? `${diffHTML} vs ${fmtDate(prev.date, { month: 'short', day: 'numeric' })} · ` : ''}7-day avg <b class="num">${nf1.format(avg)}</b>${state.body[ui.date]?.source === 'fitbit' ? ' · from Fitbit' : ''}</div></div></div>
     <div class="bw-input">${stepper({ scope: 'body', key: 'weight', value: w || '', label: '', placeholder: 'e.g. 182.4' })}<span class="muted small">${unit()}</span></div>
+  </section>`;
+}
+
+/** Steps, resting heart rate, sleep and activities imported from Fitbit. */
+function healthCard() {
+  const h = S().health?.[ui.date];
+  if (!h || !(h.steps || h.restingHr || h.sleepMin || h.activities?.length)) return '';
+  const km = (v) => (dunit() === 'km' ? v : v * 0.621371);
+  const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  const stats = [
+    h.steps ? stat('Steps', fmt(h.steps)) : '',
+    h.restingHr ? stat('Resting HR', `${h.restingHr} <small>bpm</small>`) : '',
+    h.sleepMin ? stat('Sleep', `${Math.floor(h.sleepMin / 60)}h ${h.sleepMin % 60}m`) : '',
+  ].join('');
+  const acts = (h.activities || [])
+    .map((a) => {
+      const bits = [a.start, a.minutes ? `${fmt(Math.round(a.minutes))} min` : '', a.calories ? `${fmt(a.calories)} cal` : '', a.avgHr ? `avg ${a.avgHr} bpm` : '', a.distanceKm ? `${nf1.format(km(a.distanceKm))} ${dunit()}` : ''].filter(Boolean);
+      // Keep "1.7 mi" and "52 min" together when the line wraps.
+      return `<li><b>${esc(a.name)}</b> <span class="muted small">${esc(bits.map((b) => b.replace(/ /g, '\u00a0')).join(' · '))}</span></li>`;
+    })
+    .join('');
+  return `<section class="card health" aria-label="Fitbit data">
+    <span class="label">Fitbit</span>
+    ${stats ? `<div class="stats">${stats}</div>` : ''}
+    ${acts ? `<ul class="health-acts">${acts}</ul>` : ''}
   </section>`;
 }
 
@@ -644,6 +669,7 @@ function logView() {
   <nav class="weekstrip" aria-label="This week">${week}</nav>
 
   ${bodyWeightCard()}
+  ${healthCard()}
 
   <section class="card dayhead">
     <div class="dayhead-top">
@@ -1362,6 +1388,83 @@ function progressView() {
 // Settings view
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fitbit / Google Health
+// ---------------------------------------------------------------------------
+
+let google = null; // server status, see api/google/status
+let googleChecked = 0;
+
+function agoText(t) {
+  const min = Math.round((Date.now() - t) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (min < 48 * 60) return `${Math.round(min / 60)} h ago`;
+  return fmtDate(M.toISODate(new Date(t)), { month: 'short', day: 'numeric' });
+}
+
+function googleCard() {
+  const g = google;
+  let body;
+  if (!g) {
+    body = `<p class="hint">${store.status === 'local' ? 'Needs the server (the Render app) to connect.' : 'Checking…'}</p>`;
+  } else if (g.auth) {
+    body = '<p class="hint">Enter your server password above first.</p>';
+  } else if (!g.configured) {
+    body = `<p class="hint">Bring in steps, resting heart rate, sleep, weigh-ins and workouts from your Fitbit. To turn it on, add <b>GOOGLE_CLIENT_ID</b> and <b>GOOGLE_CLIENT_SECRET</b> to the server's environment (Render → Environment), and register this redirect URI in Google Cloud:</p>
+      <code class="copy">${esc(g.redirectUri)}</code>`;
+  } else if (!g.connected || g.needsReconnect) {
+    body = `<p class="hint">${g.needsReconnect ? '<b>Google sign-in expired.</b> Connect again to keep importing.' : 'Sign in with the Google account your Fitbit uses. The app imports steps, resting heart rate, sleep, weigh-ins (unless you typed one in yourself) and workouts, read-only.'}</p>
+      <button type="button" class="btn primary" data-action="google-connect" style="align-self:flex-start">Connect Fitbit</button>`;
+  } else {
+    body = `<p class="hint">Connected${g.lastSync ? ` · last import ${agoText(g.lastSync)}` : ''}. New data comes in when you open the app.</p>
+      ${g.lastError ? `<p class="hint warn">${esc(g.lastError)}</p>` : ''}
+      <div class="row wrap">
+        <button type="button" class="btn sm" data-action="google-sync">Import now</button>
+        <button type="button" class="btn sm danger" data-action="google-disconnect">Disconnect</button>
+      </div>`;
+  }
+  return `<section class="card stack" id="google-card"><h3>Fitbit</h3>${body}</section>`;
+}
+
+function renderGoogleCard() {
+  const node = document.getElementById('google-card');
+  if (node && !isTyping()) node.outerHTML = googleCard();
+}
+
+async function refreshGoogle() {
+  if (store.status === 'local') return null;
+  try {
+    google = await store.request('api/google/status');
+  } catch (err) {
+    google = err.status === 401 ? { auth: true } : err.data?.configured !== undefined ? err.data : null;
+  }
+  googleChecked = Date.now();
+  renderGoogleCard();
+  return google;
+}
+
+/** Import from Fitbit (the server skips it if it ran in the last few minutes). */
+async function googleImport(force = false) {
+  try {
+    const res = await store.request('api/google/sync', { method: 'POST', body: { force, today: M.todayISO() } });
+    google = res;
+    renderGoogleCard();
+    if (res.changed) await store.sync();
+    return res;
+  } catch (err) {
+    if (err.data?.configured !== undefined) google = err.data;
+    renderGoogleCard();
+    throw err;
+  }
+}
+
+async function autoGoogle() {
+  if (Date.now() - googleChecked < 10 * 60 * 1000) return;
+  const g = await refreshGoogle();
+  if (g?.configured && g.connected && !g.needsReconnect) googleImport().catch(() => {});
+}
+
 function settingsView() {
   const state = S();
   const st = state.settings;
@@ -1399,6 +1502,8 @@ function settingsView() {
       <label class="btn sm">Restore backup…<input type="file" accept="application/json,.json" data-field="import" hidden></label>
     </div>
   </section>
+
+  ${googleCard()}
 
   <section class="card stack">
     <h3>Tips</h3>
@@ -1624,6 +1729,7 @@ const ACTIONS = {
     ui.tab = el.dataset.tab;
     history.replaceState(null, '', `#${ui.tab}`);
     render();
+    if (ui.tab === 'settings') refreshGoogle();
     window.scrollTo(0, 0);
   },
   'shift-day': (el) => goDate(M.addDays(ui.date, Number(el.dataset.delta))),
@@ -1937,6 +2043,35 @@ const ACTIONS = {
   },
   'export-csv'() {
     download(`logbook-sets-${M.todayISO()}.csv`, M.toCSV(S()), 'text/csv');
+  },
+  async 'google-connect'() {
+    try {
+      const { url } = await store.request('api/google/connect', { method: 'POST' });
+      location.href = url;
+    } catch (err) {
+      toast(err.message);
+    }
+  },
+  async 'google-sync'(el) {
+    el.disabled = true;
+    try {
+      const res = await googleImport(true);
+      toast(res.changed ? `Imported ${res.changed} update${res.changed === 1 ? '' : 's'} from Fitbit` : 'Fitbit: nothing new');
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      el.disabled = false;
+    }
+  },
+  async 'google-disconnect'() {
+    if (!confirm('Disconnect Fitbit? Data already imported stays in your logbook.')) return;
+    try {
+      google = await store.request('api/google/disconnect', { method: 'POST' });
+      renderGoogleCard();
+      toast('Fitbit disconnected');
+    } catch (err) {
+      toast(err.message);
+    }
   },
   'reset-all'() {
     if (!confirm('Erase ALL workouts, weigh-ins, plans and custom exercises everywhere (this device, the server and your other devices)?')) return;
@@ -2276,6 +2411,7 @@ document.addEventListener('visibilitychange', () => {
     checkToday();
     updateRestBar();
     store.sync();
+    autoGoogle();
   }
 });
 window.addEventListener('online', () => store.sync());
@@ -2294,6 +2430,21 @@ setInterval(checkToday, 60000);
 render();
 buildRestBar();
 const firstSync = store.init();
+
+// Back from Google sign-in (see /api/google/callback).
+const googleParam = new URLSearchParams(location.search).get('google');
+if (googleParam) {
+  const reason = new URLSearchParams(location.search).get('reason');
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (googleParam === 'connected') {
+    toast('Fitbit connected. Importing your data…');
+    firstSync.then(() => googleImport(true)).then(
+      (res) => toast(res?.changed ? 'Fitbit data imported' : 'Fitbit connected'),
+      (err) => toast(err.message),
+    );
+  } else toast(`Couldn't connect Fitbit: ${reason || 'try again'}`);
+}
+firstSync.then(autoGoogle);
 if (hiit) {
   if (M.hiitPosition(hiit.phases, hiitElapsed()).done) {
     // It finished while the app was closed: log it once the latest copy of
