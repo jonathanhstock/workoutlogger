@@ -129,7 +129,7 @@ export const PLAN = {
   length: 8,
   // Day 1 of the rotation. Every later date follows from this
   // (change it in the app with Plan → "Today is").
-  start: '2026-10-05',
+  start: '2026-10-02',
   days: [
     {
       name: 'Chest & Triceps',

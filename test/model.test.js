@@ -67,10 +67,19 @@ describe('the starting program', () => {
     assert.equal(s.plan[3].dayType, 'active');
   });
 
-  test('the rotation starts with Day 1 on Oct 5, 2026', () => {
+  test('Sunday Oct 4, 2026 is Day 3 (Day 1 was Oct 2)', () => {
     const s = M.defaultState();
-    assert.equal(M.planIndex(s, '2026-10-05'), 0);
-    assert.equal(M.planIndex(s, '2026-10-09'), 4); // Legs, after the first rest day
+    assert.equal(M.planIndex(s, '2026-10-02'), 0);
+    assert.equal(M.planIndex(s, '2026-10-04'), 2); // Shoulders, Rear Delts & Traps
+    assert.equal(M.planIndex(s, '2026-10-06'), 4); // Legs, after the first rest day
+  });
+
+  test('an untouched rotation start follows the program; an edited one is kept', () => {
+    // A server first started with older code saved its own start date.
+    const old = { ...M.normalizeState(null), settings: { ...M.defaultSettings(0), cycleStart: '2026-10-05' } };
+    assert.equal(M.normalizeState(old).settings.cycleStart, '2026-10-02');
+    const edited = { ...old, settings: { ...old.settings, updatedAt: 123 } };
+    assert.equal(M.normalizeState(edited).settings.cycleStart, '2026-10-05');
   });
 
   test('every plan item references a real exercise', () => {
