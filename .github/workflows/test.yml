@@ -12,3 +12,14 @@ jobs:
       - run: npm test
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+
+  # Verifies every exercise / workout video link still exists and can be
+  # embedded (YouTube oEmbed). Runs here because it needs internet access.
+  videos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run check-videos

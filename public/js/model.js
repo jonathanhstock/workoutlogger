@@ -125,7 +125,9 @@ function defaultPlan(ts) {
 }
 
 /** Cardio settings an exercise can log. */
-export const CARDIO_FIELDS = ['speed', 'incline', 'level'];
+export const CARDIO_FIELDS = ['rounds', 'speed', 'incline', 'level'];
+// Custom cardio exercises (no `fields`) log these by default.
+const DEFAULT_CARDIO_FIELDS = ['speed', 'incline', 'level'];
 
 function programExercise(id, name, kind, group, extra = {}, ts = 0) {
   return {
@@ -181,7 +183,7 @@ export function defaultTarget(kind) {
 // Validation / migration (used on load, import and by the server)
 // ---------------------------------------------------------------------------
 
-const TARGET_NUMS = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, weight: 100000, warmupSets: 10, warmupReps: 1000, dropSets: 10, failureSets: 10, restSec: 1800, minutes: 100000, distance: 100000, holdSec: 3600, speed: 30, incline: 40, level: 30 };
+const TARGET_NUMS = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, weight: 100000, warmupSets: 10, warmupReps: 1000, dropSets: 10, failureSets: 10, restSec: 1800, minutes: 100000, distance: 100000, holdSec: 3600, speed: 30, incline: 40, level: 30, rounds: 50, warmMin: 60, workSec: 600, easySec: 600, coolMin: 60 };
 
 /** Clean a plan item / entry target. Unknown keys are dropped. */
 export function normalizeTarget(t) {
@@ -321,6 +323,7 @@ function normalizeEntry(e) {
       speed: clampNum(c.speed, 0, 30),
       incline: clampNum(c.incline, 0, 40),
       level: clampNum(c.level, 0, 30),
+      rounds: Math.round(clampNum(c.rounds, 0, 50)),
       calories: clampNum(c.calories),
       avgHr: clampNum(c.avgHr, 0, 260),
       done: !!c.done,
@@ -400,7 +403,7 @@ export function exerciseKind(state, id) {
 export function cardioFields(state, id) {
   const ex = state.exercises[id];
   if (!ex || ex.kind !== 'cardio') return [];
-  return ex.fields || CARDIO_FIELDS;
+  return ex.fields || DEFAULT_CARDIO_FIELDS;
 }
 
 /** The exercise's own default target (e.g. a cardio machine's usual level). */
@@ -495,7 +498,7 @@ export function makeEntry(state, exerciseId, target, beforeDate) {
   const prev = beforeDate ? previousEntry(state, exerciseId, beforeDate) : null;
 
   if (kind === 'cardio') {
-    entry.cardio = { minutes: t.minutes, distance: t.distance || 0, speed: t.speed || 0, incline: t.incline || 0, level: t.level || 0, calories: 0, avgHr: 0, done: false };
+    entry.cardio = { minutes: t.minutes, distance: t.distance || 0, speed: t.speed || 0, incline: t.incline || 0, level: t.level || 0, rounds: t.rounds || 0, calories: 0, avgHr: 0, done: false };
     return entry;
   }
   if (isHold(kind)) {
@@ -709,6 +712,52 @@ export function restTaken(entry) {
 }
 
 // ---------------------------------------------------------------------------
+// HIIT interval timer
+// ---------------------------------------------------------------------------
+
+export const HIIT_DEFAULTS = { warmMin: 4, workSec: 45, easySec: 90, rounds: 6, coolMin: 4 };
+
+/** Interval timer settings for an entry: today's rounds, its target, then defaults. */
+export function hiitConfig(entry) {
+  const t = entry?.target || {};
+  const pick = (k) => (t[k] !== undefined && t[k] !== null ? t[k] : HIIT_DEFAULTS[k]);
+  return { warmMin: pick('warmMin'), workSec: pick('workSec') || HIIT_DEFAULTS.workSec, easySec: pick('easySec') || HIIT_DEFAULTS.easySec, rounds: entry?.cardio?.rounds || pick('rounds') || HIIT_DEFAULTS.rounds, coolMin: pick('coolMin') };
+}
+
+/** The phases of a HIIT session: warm-up, hard/easy × rounds, cool-down. */
+export function hiitPhases(cfg) {
+  const phases = [];
+  if (cfg.warmMin > 0) phases.push({ kind: 'warm', label: 'Warm-up', sec: Math.round(cfg.warmMin * 60) });
+  for (let r = 1; r <= cfg.rounds; r++) {
+    phases.push({ kind: 'hard', label: `Hard ${r}/${cfg.rounds}`, sec: cfg.workSec, round: r });
+    phases.push({ kind: 'easy', label: `Easy ${r}/${cfg.rounds}`, sec: cfg.easySec, round: r });
+  }
+  if (cfg.coolMin > 0) phases.push({ kind: 'cool', label: 'Cool-down', sec: Math.round(cfg.coolMin * 60) });
+  return phases;
+}
+
+/**
+ * Where a session is after `elapsedMs`: the current phase index, seconds
+ * left in it, rounds fully completed (a round counts once its hard part is
+ * done) and whether the whole session is over.
+ */
+export function hiitPosition(phases, elapsedMs) {
+  let t = Math.max(0, elapsedMs) / 1000;
+  let rounds = 0;
+  for (let i = 0; i < phases.length; i++) {
+    const p = phases[i];
+    if (t < p.sec) return { index: i, remaining: p.sec - t, rounds: p.kind === 'easy' ? Math.max(rounds, p.round) : rounds, done: false };
+    t -= p.sec;
+    if (p.kind === 'hard') rounds = p.round;
+  }
+  return { index: phases.length, remaining: 0, rounds, done: true };
+}
+
+export function hiitTotalSec(phases) {
+  return phases.reduce((a, p) => a + p.sec, 0);
+}
+
+// ---------------------------------------------------------------------------
 // Metrics & history
 // ---------------------------------------------------------------------------
 
@@ -739,6 +788,7 @@ export function entryMetrics(entry, onlyDone = true) {
       speed: counted ? c.speed || 0 : 0,
       incline: counted ? c.incline || 0 : 0,
       level: counted ? c.level || 0 : 0,
+      rounds: counted ? c.rounds || 0 : 0,
       calories: counted ? c.calories || 0 : 0,
       pace: distance > 0 ? round(minutes / distance, 2) : 0,
       done: !!c.done,

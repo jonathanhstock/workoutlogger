@@ -34,6 +34,10 @@ async function openApp(device = PHONE, hash = '#log') {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   page.on('dialog', (d) => d.accept());
+  // No internet in tests: stand in for YouTube thumbnails and the player.
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+  await page.route('https://i.ytimg.com/**', (r) => r.fulfill({ status: 200, contentType: 'image/png', body: PNG }));
+  await page.route('https://www.youtube-nocookie.com/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<p>player</p>' }));
   await page.goto(`${base}/${hash}`);
   await page.waitForSelector('#sync[data-status="synced"]');
   return { context, page, errors };
@@ -292,6 +296,44 @@ describe('workout logbook in the browser', () => {
     assert.equal(await stairs.getByRole('textbox', { name: 'Level', exact: true }).inputValue(), '8');
     assert.equal(await stairs.getByRole('textbox', { name: 'Speed (mph)', exact: true }).count(), 0);
     await stairs.getByRole('button', { name: 'Increase Level' }).click();
+    // HIIT options are in the cardio swap list and log intervals.
+    await stairs.getByRole('button', { name: /Swap Stairmaster/ }).click();
+    await page.locator('.pick', { hasText: 'HIIT Elliptical' }).click();
+    const hiit = card(page, 'HIIT Elliptical');
+    await hiit.locator('.cue', { hasText: 'Level 12–15' }).waitFor();
+    assert.equal(await hiit.getByRole('textbox', { name: 'Intervals', exact: true }).inputValue(), '6');
+    await hiit.getByRole('button', { name: 'Increase Intervals' }).click();
+    await serverHas(page, (s) => todayEntry(s, 'hiit-elliptical')?.cardio.rounds === 7);
+
+    // Interval timer: no warm-up/cool-down, 2 rounds of 45 s hard / 90 s easy.
+    await hiit.getByRole('button', { name: '⏱ Interval timer' }).click();
+    const setup = page.locator('.hiit-setup');
+    for (let i = 0; i < 4; i++) await setup.getByRole('button', { name: 'Decrease Warm-up (min)' }).click();
+    for (let i = 0; i < 4; i++) await setup.getByRole('button', { name: 'Decrease Cool-down (min)' }).click();
+    for (let i = 0; i < 5; i++) await setup.getByRole('button', { name: 'Decrease Rounds' }).click();
+    assert.equal(await setup.getByRole('textbox', { name: 'Rounds' }).inputValue(), '2');
+    await setup.getByRole('button', { name: 'Start' }).click();
+    const bar = page.locator('#hiit');
+    await bar.locator('[data-hiit-label]', { hasText: 'Hard 1/2' }).waitFor();
+    assert.equal(await bar.getAttribute('data-kind'), 'hard');
+    await bar.locator('[data-hiit-time]', { hasText: '0:45' }).waitFor();
+    await page.clock.runFor(46000);
+    await bar.locator('[data-hiit-label]', { hasText: 'Easy 1/2' }).waitFor();
+    // Pause holds the time; skip jumps to the next interval.
+    await bar.getByRole('button', { name: 'Pause' }).click();
+    const frozen = await bar.locator('[data-hiit-time]').textContent();
+    await page.clock.runFor(20000);
+    assert.equal(await bar.locator('[data-hiit-time]').textContent(), frozen);
+    await bar.getByRole('button', { name: 'Resume' }).click();
+    await bar.getByRole('button', { name: 'Skip to next interval' }).click();
+    await bar.locator('[data-hiit-label]', { hasText: 'Hard 2/2' }).waitFor();
+    await page.clock.runFor(136000);
+    await page.locator('#toast', { hasText: 'HIIT logged: 2 intervals' }).waitFor();
+    assert.equal(await bar.isHidden(), true);
+    await serverHas(page, (s) => todayEntry(s, 'hiit-elliptical')?.cardio.rounds === 2 && todayEntry(s, 'hiit-elliptical').cardio.done);
+    await hiit.getByRole('button', { name: /Swap HIIT Elliptical/ }).click();
+    await page.locator('.pick', { hasText: 'Stairmaster' }).click();
+    await card(page, 'Stairmaster').getByRole('button', { name: 'Increase Level' }).click();
     // Metric is available in Settings; US units are the default.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'lb', exact: true }).waitFor();
@@ -302,6 +344,33 @@ describe('workout logbook in the browser', () => {
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'mi · mph' }).click();
     await serverHas(page, (s) => todayEntry(s, 'stairmaster')?.cardio.level === 9 && todayEntry(s, 'incline-db-press').sets.some((x) => x.done));
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  test('exercises tab lists exercises with playable form videos', async () => {
+    const { context, page, errors } = await openApp();
+    // Form video link right on the Log card.
+    await card(page, 'Skull Crusher').getByRole('button', { name: '▶ Form video' }).click();
+    assert.match(await page.locator('.sheet-panel iframe').getAttribute('src'), /youtube-nocookie\.com\/embed\/Hdx3L8vjeeA/);
+    await page.locator('.sheet-panel').getByRole('button', { name: 'Close', exact: true }).click();
+
+    await page.getByRole('button', { name: 'Exercises', exact: true }).click();
+    await page.getByText('Full workouts').waitFor();
+    assert.equal(await page.locator('.video-tile', { hasText: 'Glute workout with bands' }).count(), 1);
+    await page.locator('[data-field="lib-q"]').fill('hang clean');
+    await page.locator('.lib-ex h3', { hasText: 'Hang Clean' }).waitFor();
+    assert.equal(await page.locator('.lib-ex').count(), 1);
+    await page.getByRole('button', { name: 'Play video: Hang cleans' }).click();
+    assert.match(await page.locator('.sheet-panel iframe').getAttribute('src'), /embed\/eVWbmwSg5CE/);
+    assert.equal(await page.getByRole('link', { name: 'Open in YouTube' }).getAttribute('href'), 'https://youtu.be/eVWbmwSg5CE');
+    await page.locator('.sheet-panel').getByRole('button', { name: 'Close', exact: true }).click();
+    // Filter by group and add one to today's log.
+    await page.locator('[data-field="lib-q"]').fill('');
+    await page.getByRole('button', { name: 'Glutes', exact: true }).click();
+    await page.locator('.lib-ex', { hasText: 'Frog Pump' }).getByRole('button', { name: '+ Add to today' }).click();
+    await page.getByRole('button', { name: 'Log', exact: true }).click();
+    await card(page, 'Frog Pump').waitFor();
     assert.deepEqual(errors, []);
     await context.close();
   });
@@ -436,7 +505,7 @@ describe('workout logbook in the browser', () => {
       // Day 3 has the longest name in the rotation picker.
       await page.locator('.weekstrip button').nth(2).click();
       await page.locator('.dayname[value^="Shoulders"]').waitFor();
-      for (const tab of ['Log', 'Plan', 'Progress', 'Settings']) {
+      for (const tab of ['Log', 'Plan', 'Exercises', 'Progress', 'Settings']) {
         await page.getByRole('button', { name: tab, exact: true }).click();
         await page.waitForTimeout(100);
         const wide = await page.evaluate(() => {

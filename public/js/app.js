@@ -1,4 +1,5 @@
 import * as M from './model.js';
+import { VIDEOS, WORKOUT_VIDEOS, youtubeId } from './program.js';
 import { createStore } from './store.js';
 import { lineChart, barChart, hideTip } from './charts.js';
 
@@ -11,12 +12,13 @@ const $sheet = document.getElementById('sheet');
 const $sheetPanel = $sheet.querySelector('.sheet-panel');
 const $rest = document.getElementById('rest');
 
-const TABS = ['log', 'plan', 'progress', 'settings'];
+const TABS = ['log', 'plan', 'exercises', 'progress', 'settings'];
 const ui = {
   tab: TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'log',
   date: M.todayISO(),
   editing: new Set(), // entry ids with the target editor open
   planMore: new Set(), // plan item ids with advanced options open
+  lib: { q: '', group: 'All' },
   progress: { range: '3m', exerciseId: null, picked: false, metric: null, chart: 'volume' },
   sheet: null,
 };
@@ -86,13 +88,14 @@ const CARDIO_LABEL = {
   },
   incline: 'Incline',
   level: 'Level',
+  rounds: 'Intervals',
 };
 
 const range = (lo, hi) => (hi && hi > lo ? `${fmt(lo)}–${fmt(hi)}` : fmt(lo));
 
 /** Cardio settings as text, e.g. "incline 12 · 3 mph" or "level 8". */
 function cardioSettingsText(c) {
-  return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} ${speedUnit()}` : '', c.level ? `level ${fmt(c.level)}` : ''].filter(Boolean).join(' · ');
+  return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} ${speedUnit()}` : '', c.level ? `level ${fmt(c.level)}` : '', c.rounds ? `${fmt(c.rounds)} intervals` : ''].filter(Boolean).join(' · ');
 }
 
 function targetText(t, kind) {
@@ -170,11 +173,12 @@ const STEP = {
   speed: () => 0.1,
   incline: () => 0.5,
   level: () => 1,
+  rounds: () => 1,
   calories: () => 10,
   avgHr: () => 1,
 };
-const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level']);
-const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260, speed: 30, incline: 40, level: 30 };
+const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level', 'rounds']);
+const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260, speed: 30, incline: 40, level: 30, rounds: 50 };
 
 function cleanValue(key, v) {
   v = Math.max(0, Math.min(MAX[key] ?? 100000, Number(v) || 0));
@@ -225,6 +229,13 @@ function changeValue(d, fn) {
       s.settings[key] = INTEGER.has(key) ? Math.round(v) : M.round(v, 2);
       s.settings.updatedAt = Date.now();
     });
+    return;
+  }
+  if (scope === 'hiit') {
+    // Interval timer setup lives only in the setup sheet until you press Start.
+    const r = { warmMin: [0, 30, 1], workSec: [5, 600, 5], easySec: [5, 600, 5], rounds: [1, 50, 1], coolMin: [0, 30, 1] }[key];
+    ui.hiitSetup.cfg[key] = Math.min(r[1], Math.max(r[0], Math.round(Number(fn(ui.hiitSetup.cfg[key] || 0, r[2])) || 0)));
+    renderHiitSetup();
     return;
   }
   if (scope === 'body') {
@@ -423,14 +434,14 @@ function unlockAudio() {
   }
 }
 
-function beep() {
+function beep(freq = 880, count = 3) {
   if (!audio || !S().settings.restSound) return;
   try {
     const t0 = audio.currentTime;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < count; i++) {
       const osc = audio.createOscillator();
       const gain = audio.createGain();
-      osc.frequency.value = 880;
+      osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.0001, t0 + i * 0.25);
       gain.gain.exponentialRampToValueAtTime(0.3, t0 + i * 0.25 + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.25 + 0.18);
@@ -461,7 +472,7 @@ function buildRestBar() {
   if (!rest) {
     $rest.hidden = true;
     $rest.innerHTML = '';
-    document.body.classList.remove('has-rest');
+    if (!hiit) document.body.classList.remove('has-rest');
     return;
   }
   $rest.hidden = false;
@@ -693,6 +704,7 @@ function entryCard(e, index, session) {
         <div class="target-line"><span>Target <b>${targetText(e.target, e.kind)}</b></span>
           <button type="button" class="link-btn" data-action="toggle-target" data-entry="${e.id}" aria-expanded="${editing}">${editing ? 'Done' : 'Edit target'}</button></div>
         ${cue ? `<div class="cue">${esc(cue)}</div>` : ''}
+        ${VIDEOS[e.exerciseId] ? `<button type="button" class="video-link" data-action="video" data-url="${esc(VIDEOS[e.exerciseId][0][1])}" data-title="${esc(name)}">▶ Form video</button>` : ''}
         ${ssLine ? `<div class="ss-line">${ssLine}</div>` : ''}
       </div>
       ${counterHTML(e)}
@@ -851,7 +863,180 @@ function cardioBody(e) {
       ${field('calories', 'Calories')}
       ${field('avgHr', 'Avg heart rate')}
     </div>
+    ${M.cardioFields(S(), e.exerciseId).includes('rounds') ? `<button type="button" class="btn block" data-action="hiit-setup" data-entry="${e.id}">${hiit && hiit.entryId === e.id ? '⏱ Interval timer running' : '⏱ Interval timer'}</button>` : ''}
     <button type="button" class="btn block ${c.done ? '' : 'primary'}" data-action="cardio-done" data-entry="${e.id}" aria-pressed="${c.done}">${c.done ? `${ICON.check} Completed – tap to undo` : 'Mark cardio complete'}</button>`;
+}
+
+// ---------------------------------------------------------------------------
+// HIIT interval timer
+// ---------------------------------------------------------------------------
+
+const HIIT_KEY = 'workout-logbook:hiit';
+const $hiit = document.getElementById('hiit');
+let hiit = null; // { entryId, date, name, cfg, phases, startedAt, pausedAt, pausedMs, lastIndex, lastBeep }
+let hiitTick = null;
+let wakeLock = null;
+
+try {
+  const saved = JSON.parse(localStorage.getItem(HIIT_KEY) || 'null');
+  if (saved && saved.phases && !M.hiitPosition(saved.phases, (saved.pausedAt || Date.now()) - saved.startedAt - saved.pausedMs).done) hiit = saved;
+} catch {
+  /* ignore */
+}
+
+function saveHiit() {
+  try {
+    if (hiit) localStorage.setItem(HIIT_KEY, JSON.stringify(hiit));
+    else localStorage.removeItem(HIIT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function hiitElapsed() {
+  return (hiit.pausedAt || Date.now()) - hiit.startedAt - hiit.pausedMs;
+}
+
+function openHiitSetup(entryId) {
+  if (hiit) return toast('An interval timer is already running');
+  const { session } = dayData(ui.date);
+  const e = M.findEntry(session, entryId);
+  if (!e) return;
+  // Store the day first so the entry id stays valid.
+  editSession(() => {});
+  ui.hiitSetup = { entryId, date: ui.date, cfg: M.hiitConfig(e), name: M.exerciseName(S(), e.exerciseId) };
+  ui.sheet = { mode: 'hiit' };
+  $sheet.hidden = false;
+  renderHiitSetup();
+}
+
+function renderHiitSetup() {
+  const { cfg, name } = ui.hiitSetup;
+  const st = (key, label) => stepper({ scope: 'hiit', key, value: cfg[key], label });
+  const total = M.hiitTotalSec(M.hiitPhases(cfg));
+  $sheetPanel.innerHTML = `
+    <div class="spread"><h2 id="sheet-title">${esc(name)} intervals</h2>
+      <button type="button" class="icon-btn" data-action="close-sheet" aria-label="Close">${ICON.close}</button></div>
+    <div class="hiit-setup stack">
+      <div class="grid3">${st('workSec', 'Hard (sec)')}${st('easySec', 'Easy (sec)')}${st('rounds', 'Rounds')}</div>
+      <div class="grid2">${st('warmMin', 'Warm-up (min)')}${st('coolMin', 'Cool-down (min)')}</div>
+      <p class="hint">Total about <b>${Math.round(total / 60)} min</b>. You'll hear a beep and feel a buzz at each switch, with a 3-2-1 countdown. The timer keeps time if you lock your phone.</p>
+      <button type="button" class="btn primary block" data-action="hiit-start">Start</button>
+    </div>`;
+}
+
+async function keepAwake(on) {
+  try {
+    if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+    else if (!on && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch {
+    /* not supported or not allowed */
+  }
+}
+
+function startHiit() {
+  const { entryId, date, cfg, name } = ui.hiitSetup;
+  // Remember these settings on the entry for next time.
+  editSession((sess) => {
+    const e = M.findEntry(sess, entryId);
+    if (e) Object.assign(e.target, cfg);
+  }, date);
+  closeSheet();
+  stopRest();
+  hiit = { entryId, date, name, cfg, phases: M.hiitPhases(cfg), startedAt: Date.now(), pausedAt: 0, pausedMs: 0, lastIndex: -1, lastBeep: -1 };
+  saveHiit();
+  keepAwake(true);
+  buildHiitBar();
+  render();
+}
+
+function buildHiitBar() {
+  clearInterval(hiitTick);
+  if (!hiit) {
+    $hiit.hidden = true;
+    $hiit.innerHTML = '';
+    if (!rest) document.body.classList.remove('has-rest');
+    return;
+  }
+  $hiit.hidden = false;
+  document.body.classList.add('has-rest');
+  $hiit.innerHTML = `
+    <div class="rest-fill" data-hiit-fill></div>
+    <div class="rest-main">
+      <div class="rest-text"><span class="label" data-hiit-label>HIIT</span><span class="rest-time" data-hiit-time>0:00</span><span class="rest-sub" data-hiit-sub>${esc(hiit.name)}</span></div>
+      <div class="rest-btns">
+        <button type="button" class="btn sm" data-action="hiit-pause" data-hiit-pause>Pause</button>
+        <button type="button" class="btn sm" data-action="hiit-skip" aria-label="Skip to next interval">Skip</button>
+        <button type="button" class="btn sm primary" data-action="hiit-end">End</button>
+      </div>
+    </div>`;
+  updateHiitBar();
+  hiitTick = setInterval(updateHiitBar, 250);
+}
+
+function hiitCue(kind) {
+  vibrate(kind === 'hard' ? [300, 100, 300] : 300);
+  beep(kind === 'hard' ? 1320 : 660, kind === 'hard' ? 3 : 2);
+}
+
+function updateHiitBar() {
+  if (!hiit) return;
+  const pos = M.hiitPosition(hiit.phases, hiitElapsed());
+  if (pos.done) return finishHiit(true);
+  const p = hiit.phases[pos.index];
+  if (pos.index !== hiit.lastIndex) {
+    if (hiit.lastIndex !== -1 || pos.index === 0) hiitCue(p.kind);
+    hiit.lastIndex = pos.index;
+    hiit.lastBeep = -1;
+    saveHiit();
+  }
+  const left = Math.ceil(pos.remaining);
+  // 3-2-1 countdown before each switch.
+  if (left <= 3 && left >= 1 && hiit.lastBeep !== left && !hiit.pausedAt) {
+    hiit.lastBeep = left;
+    beep(880, 1);
+  }
+  const next = hiit.phases[pos.index + 1];
+  $hiit.dataset.kind = p.kind;
+  $hiit.classList.toggle('is-paused', !!hiit.pausedAt);
+  $hiit.querySelector('[data-hiit-label]').textContent = hiit.pausedAt ? `${p.label} · paused` : p.label;
+  $hiit.querySelector('[data-hiit-time]').textContent = fmtClock(left);
+  $hiit.querySelector('[data-hiit-sub]').textContent = `${hiit.name}${next ? ` · next: ${next.label}` : ' · last interval'}`;
+  $hiit.querySelector('[data-hiit-fill]').style.width = `${Math.min(100, (1 - pos.remaining / p.sec) * 100)}%`;
+  $hiit.querySelector('[data-hiit-pause]').textContent = hiit.pausedAt ? 'Resume' : 'Pause';
+}
+
+/** Log rounds and minutes on the entry and close the timer. */
+function finishHiit(completed) {
+  if (!hiit) return;
+  const t = hiit;
+  const pos = M.hiitPosition(t.phases, (t.pausedAt || Date.now()) - t.startedAt - t.pausedMs);
+  const rounds = completed ? t.cfg.rounds : pos.rounds;
+  const minutes = Math.max(1, Math.round(Math.min(hiitElapsedOf(t), M.hiitTotalSec(t.phases) * 1000) / 60000));
+  hiit = null;
+  saveHiit();
+  clearInterval(hiitTick);
+  keepAwake(false);
+  buildHiitBar();
+  editSession((sess) => {
+    const e = M.findEntry(sess, t.entryId);
+    if (!e) return;
+    e.cardio.rounds = rounds;
+    e.cardio.minutes = minutes;
+    if (rounds > 0) e.cardio.done = true;
+  }, t.date);
+  if (completed) {
+    beep(990, 4);
+    vibrate([200, 100, 200, 100, 400]);
+  }
+  toast(rounds ? `HIIT logged: ${rounds} interval${rounds === 1 ? '' : 's'}, ${minutes} min` : 'Interval timer stopped');
+}
+
+function hiitElapsedOf(t) {
+  return (t.pausedAt || Date.now()) - t.startedAt - t.pausedMs;
 }
 
 // ---------------------------------------------------------------------------
@@ -980,6 +1165,7 @@ const EX_METRICS = {
     ['speed', 'Speed', (m) => m.speed],
     ['incline', 'Incline', (m) => m.incline],
     ['level', 'Level', (m) => m.level],
+    ['rounds', 'Intervals', (m) => m.rounds],
   ],
   vacuum: HOLD_METRICS,
   timed: HOLD_METRICS,
@@ -993,6 +1179,7 @@ function metricFormatter(kind, key) {
   if (key === 'minutes') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} min`);
   if (key === 'speed') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} ${speedUnit()}`);
   if (key === 'incline') return (v, axis) => (axis ? fmt(v) : `incline ${fmt(v)}`);
+  if (key === 'rounds') return (v, axis) => (axis ? fmt(v) : `${fmt(v)} intervals`);
   if (key === 'level') return (v, axis) => (axis ? fmt(v) : `level ${fmt(v)}`);
   return (v) => fmt(v);
 }
@@ -1227,7 +1414,58 @@ function settingsView() {
   </section>`;
 }
 
-const VIEWS = { log: logView, plan: planView, progress: progressView, settings: settingsView };
+// ---------------------------------------------------------------------------
+// Exercises tab: every exercise with its form videos
+// ---------------------------------------------------------------------------
+
+function videoTile([title, url]) {
+  const id = youtubeId(url);
+  if (!id) return '';
+  return `<button type="button" class="video-tile" data-action="video" data-url="${esc(url)}" data-title="${esc(title)}" aria-label="Play video: ${esc(title)}">
+    <span class="video-thumb"><img src="https://i.ytimg.com/vi/${id}/mqdefault.jpg" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="play">${ICON.play}</span></span>
+    <span class="t">${esc(title)}</span></button>`;
+}
+
+function exercisesView() {
+  const state = S();
+  const { q, group } = ui.lib;
+  const all = M.activeExercises(state);
+  const groups = ['All', ...new Set(all.map((e) => e.group || 'Other').sort())];
+  const needle = q.trim().toLowerCase();
+  const list = all.filter((e) => (group === 'All' || (e.group || 'Other') === group) && (!needle || e.name.toLowerCase().includes(needle) || (e.group || '').toLowerCase().includes(needle)));
+  const withVideos = all.filter((e) => VIDEOS[e.id]).length;
+  const items = list
+    .map((e) => {
+      const vids = VIDEOS[e.id] || [];
+      return `<article class="card lib-ex">
+        <div class="lib-ex-head"><h3>${esc(e.name)}</h3><span class="badge ${e.kind}">${M.KINDS[e.kind]}</span>${e.group ? `<span class="muted small">${esc(e.group)}</span>` : ''}</div>
+        ${e.cue ? `<div class="cue">${esc(e.cue)}</div>` : ''}
+        ${vids.length ? `<div class="videos">${vids.map(videoTile).join('')}</div>` : '<p class="hint">No video yet.</p>'}
+        <div><button type="button" class="btn sm" data-action="lib-add" data-ex="${esc(e.id)}">+ Add to today</button></div>
+      </article>`;
+    })
+    .join('');
+  const workouts = !needle && group === 'All' ? `<section class="card stack"><h3>Full workouts</h3><div class="videos">${WORKOUT_VIDEOS.map(videoTile).join('')}</div></section>` : '';
+  return `<div class="stack"><h2>Exercises</h2><p class="hint">${all.length} exercises, ${withVideos} with form videos. Tap a video to play it.</p></div>
+    <div class="lib-search"><input type="search" data-field="lib-q" value="${esc(q)}" placeholder="Search exercises" aria-label="Search exercises" autocomplete="off"></div>
+    <div class="seg" role="group" aria-label="Muscle group">${groups.map((g) => `<button type="button" data-action="lib-group" data-group="${esc(g)}" aria-pressed="${g === group}">${esc(g)}</button>`).join('')}</div>
+    ${workouts}
+    ${items || '<p class="hint">No exercises match.</p>'}`;
+}
+
+function openVideo(url, title) {
+  const id = youtubeId(url);
+  if (!id) return;
+  ui.sheet = { mode: 'video' };
+  $sheetPanel.innerHTML = `
+    <div class="spread"><h2 id="sheet-title">${esc(title)}</h2>
+      <button type="button" class="icon-btn" data-action="close-sheet" aria-label="Close">${ICON.close}</button></div>
+    <iframe class="video-frame" src="https://www.youtube-nocookie.com/embed/${id}?playsinline=1&rel=0&modestbranding=1" title="${esc(title)}" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    <a class="btn sm" href="https://youtu.be/${id}" target="_blank" rel="noopener">Open in YouTube</a>`;
+  $sheet.hidden = false;
+}
+
+const VIEWS = { log: logView, plan: planView, exercises: exercisesView, progress: progressView, settings: settingsView };
 
 // ---------------------------------------------------------------------------
 // Exercise picker sheet (add / swap / create)
@@ -1266,7 +1504,7 @@ function closeSheet() {
 
 function renderSheetList() {
   const sh = ui.sheet;
-  if (!sh) return;
+  if (!sh || sh.mode === 'video' || sh.mode === 'hiit') return;
   const kinds = document.getElementById('sheet-kinds');
   kinds.innerHTML = [['all', 'All'], ...Object.entries(M.KINDS)].map(([k, v]) => `<button type="button" data-action="sheet-kind" data-kind="${k}" aria-pressed="${sh.kind === k}">${v}</button>`).join('');
   const q = sh.q.trim().toLowerCase();
@@ -1529,6 +1767,31 @@ const ACTIONS = {
     updateRestBar();
   },
   'rest-skip': stopRest,
+  'hiit-setup'(el) {
+    if (hiit && hiit.entryId === el.dataset.entry) return toast('Use the timer bar to pause, skip or end');
+    openHiitSetup(el.dataset.entry);
+  },
+  'hiit-start': () => startHiit(),
+  'hiit-pause'() {
+    if (!hiit) return;
+    if (hiit.pausedAt) {
+      hiit.pausedMs += Date.now() - hiit.pausedAt;
+      hiit.pausedAt = 0;
+    } else hiit.pausedAt = Date.now();
+    saveHiit();
+    updateHiitBar();
+  },
+  'hiit-skip'() {
+    if (!hiit) return;
+    const pos = M.hiitPosition(hiit.phases, hiitElapsed());
+    // Jump to the start of the next phase.
+    hiit.startedAt -= Math.ceil(pos.remaining * 1000);
+    saveHiit();
+    updateHiitBar();
+  },
+  'hiit-end'() {
+    if (hiit && confirm('End the interval timer and log the rounds you finished?')) finishHiit(false);
+  },
   'bw-log'() {
     const prev = M.previousBodyWeight(S(), ui.date);
     if (prev) {
@@ -1663,6 +1926,20 @@ const ACTIONS = {
   'set-autorest': (el) => updateSettings({ autoRest: el.dataset.value === 'true' }),
   'set-restsound': (el) => updateSettings({ restSound: el.dataset.value === 'true' }),
   'sync-now': () => syncNow(),
+  video: (el) => openVideo(el.dataset.url, el.dataset.title),
+  'lib-group'(el) {
+    ui.lib.group = el.dataset.group;
+    render();
+  },
+  'lib-add'(el) {
+    const exId = el.dataset.ex;
+    const today = M.todayISO();
+    editSession((sess, s) => {
+      const prev = M.previousEntry(s, exId, today);
+      sess.entries.push(M.makeEntry(s, exId, prev?.entry.target, today));
+    }, today);
+    toast(`Added ${M.exerciseName(S(), exId)} to today`);
+  },
   'go-home'() {
     closeSheet();
     ui.tab = 'log';
@@ -1902,6 +2179,23 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
+// Exercises tab search filters as you type.
+document.addEventListener('input', (ev) => {
+  if (ev.target.matches?.('[data-field="lib-q"]')) {
+    ui.lib.q = ev.target.value;
+    render();
+  }
+});
+
+// Mark video thumbnails that fail to load (removed or private videos).
+document.addEventListener(
+  'error',
+  (ev) => {
+    if (ev.target.matches?.('.video-thumb img')) ev.target.parentElement.classList.add('is-broken');
+  },
+  true,
+);
+
 document.addEventListener('focusin', (ev) => {
   // Select the whole number so typing replaces it.
   if (ev.target.matches?.('.stepper input')) setTimeout(() => ev.target.select?.(), 0);
@@ -2043,6 +2337,10 @@ setInterval(checkToday, 60000);
 
 render();
 buildRestBar();
+if (hiit) {
+  keepAwake(true);
+  buildHiitBar();
+}
 store.init();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
