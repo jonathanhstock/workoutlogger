@@ -304,6 +304,33 @@ describe('workout logbook in the browser', () => {
     assert.equal(await hiit.getByRole('textbox', { name: 'Intervals', exact: true }).inputValue(), '6');
     await hiit.getByRole('button', { name: 'Increase Intervals' }).click();
     await serverHas(page, (s) => todayEntry(s, 'hiit-elliptical')?.cardio.rounds === 7);
+
+    // Interval timer: no warm-up/cool-down, 2 rounds of 45 s hard / 90 s easy.
+    await hiit.getByRole('button', { name: '⏱ Interval timer' }).click();
+    const setup = page.locator('.hiit-setup');
+    for (let i = 0; i < 4; i++) await setup.getByRole('button', { name: 'Decrease Warm-up (min)' }).click();
+    for (let i = 0; i < 4; i++) await setup.getByRole('button', { name: 'Decrease Cool-down (min)' }).click();
+    for (let i = 0; i < 5; i++) await setup.getByRole('button', { name: 'Decrease Rounds' }).click();
+    assert.equal(await setup.getByRole('textbox', { name: 'Rounds' }).inputValue(), '2');
+    await setup.getByRole('button', { name: 'Start' }).click();
+    const bar = page.locator('#hiit');
+    await bar.locator('[data-hiit-label]', { hasText: 'Hard 1/2' }).waitFor();
+    assert.equal(await bar.getAttribute('data-kind'), 'hard');
+    await bar.locator('[data-hiit-time]', { hasText: '0:45' }).waitFor();
+    await page.clock.runFor(46000);
+    await bar.locator('[data-hiit-label]', { hasText: 'Easy 1/2' }).waitFor();
+    // Pause holds the time; skip jumps to the next interval.
+    await bar.getByRole('button', { name: 'Pause' }).click();
+    const frozen = await bar.locator('[data-hiit-time]').textContent();
+    await page.clock.runFor(20000);
+    assert.equal(await bar.locator('[data-hiit-time]').textContent(), frozen);
+    await bar.getByRole('button', { name: 'Resume' }).click();
+    await bar.getByRole('button', { name: 'Skip to next interval' }).click();
+    await bar.locator('[data-hiit-label]', { hasText: 'Hard 2/2' }).waitFor();
+    await page.clock.runFor(136000);
+    await page.locator('#toast', { hasText: 'HIIT logged: 2 intervals' }).waitFor();
+    assert.equal(await bar.isHidden(), true);
+    await serverHas(page, (s) => todayEntry(s, 'hiit-elliptical')?.cardio.rounds === 2 && todayEntry(s, 'hiit-elliptical').cardio.done);
     await hiit.getByRole('button', { name: /Swap HIIT Elliptical/ }).click();
     await page.locator('.pick', { hasText: 'Stairmaster' }).click();
     await card(page, 'Stairmaster').getByRole('button', { name: 'Increase Level' }).click();

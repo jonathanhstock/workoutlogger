@@ -16,8 +16,8 @@ export const EXERCISES = [
   ['outdoor-walk', 'Outdoor Walk', 'cardio', 'Cardio', { fields: [], target: { minutes: 30 }, cue: 'Medium-fast pace' }],
   // HIIT: 3–5 min warm-up jog, then 4–8 rounds of 45–60 s high intensity +
   // 90–120 s walk/light jog, then a 4–5 min cool-down walk (~25 min total).
-  ['hiit-treadmill', 'HIIT Treadmill', 'cardio', 'Cardio', { fields: ['rounds', 'speed', 'incline'], target: { minutes: 25, rounds: 6, incline: 7 }, cue: 'Incline 7–8 · warm up 3–5 min light jog · 45–60 s hard run / 90–120 s walk or light jog × 4–8 · cool down 4–5 min slow walk' }],
-  ['hiit-elliptical', 'HIIT Elliptical', 'cardio', 'Cardio', { fields: ['rounds', 'level'], target: { minutes: 25, rounds: 6, level: 12 }, cue: 'Level 12–15 · warm up 3–5 min easy · 45–60 s all-out / 90–120 s easy × 4–8 · cool down 4–5 min easy' }],
+  ['hiit-treadmill', 'HIIT Treadmill', 'cardio', 'Cardio', { fields: ['rounds', 'speed', 'incline'], target: { minutes: 25, rounds: 6, incline: 7, warmMin: 4, workSec: 45, easySec: 90, coolMin: 4 }, cue: 'Incline 7–8 · warm up 3–5 min light jog · 45–60 s hard run / 90–120 s walk or light jog × 4–8 · cool down 4–5 min slow walk' }],
+  ['hiit-elliptical', 'HIIT Elliptical', 'cardio', 'Cardio', { fields: ['rounds', 'level'], target: { minutes: 25, rounds: 6, level: 12, warmMin: 4, workSec: 45, easySec: 90, coolMin: 4 }, cue: 'Level 12–15 · warm up 3–5 min easy · 45–60 s all-out / 90–120 s easy × 4–8 · cool down 4–5 min easy' }],
   ['treadmill', 'Treadmill', 'cardio', 'Cardio', { fields: ['speed', 'incline'], target: { minutes: 30, speed: 3, incline: 1 } }],
 
   // Stomach vacuum

@@ -562,3 +562,36 @@ describe('plan helpers and export', () => {
     assert.ok(lines[3].includes('bodyweight'));
   });
 });
+
+describe('HIIT interval timer', () => {
+  const cfg = { warmMin: 1, workSec: 45, easySec: 90, rounds: 2, coolMin: 1 };
+
+  test('phases: warm-up, hard/easy per round, cool-down', () => {
+    const phases = M.hiitPhases(cfg);
+    assert.deepEqual(phases.map((p) => p.label), ['Warm-up', 'Hard 1/2', 'Easy 1/2', 'Hard 2/2', 'Easy 2/2', 'Cool-down']);
+    assert.equal(M.hiitTotalSec(phases), 60 + 2 * 135 + 60);
+    assert.deepEqual(M.hiitPhases({ ...cfg, warmMin: 0, coolMin: 0 }).map((p) => p.kind), ['hard', 'easy', 'hard', 'easy']);
+  });
+
+  test('position tracks the current phase and completed rounds', () => {
+    const phases = M.hiitPhases(cfg);
+    assert.deepEqual(M.hiitPosition(phases, 30000), { index: 0, remaining: 30, rounds: 0, done: false });
+    const hard = M.hiitPosition(phases, 70000);
+    assert.equal(phases[hard.index].label, 'Hard 1/2');
+    assert.equal(hard.rounds, 0);
+    const easy = M.hiitPosition(phases, 110000);
+    assert.equal(phases[easy.index].label, 'Easy 1/2');
+    assert.equal(easy.rounds, 1);
+    assert.equal(M.hiitPosition(phases, 391000).done, true);
+    assert.equal(M.hiitPosition(phases, 391000).rounds, 2);
+  });
+
+  test('config comes from the entry target with defaults', () => {
+    const s = M.defaultState();
+    const e = M.makeEntry(s, 'hiit-treadmill');
+    assert.deepEqual(M.hiitConfig(e), { warmMin: 4, workSec: 45, easySec: 90, rounds: 6, coolMin: 4 });
+    // Rounds set on the card today win over the plan.
+    e.cardio.rounds = 8;
+    assert.equal(M.hiitConfig(e).rounds, 8);
+  });
+});
