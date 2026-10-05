@@ -157,6 +157,17 @@ const coreCircuit = [
 // Replaced because YouTube refused to embed them (HTTP 403 from oEmbed):
 //   reverse pec deck https://youtu.be/qdYLu49hg1c, pull-through https://youtu.be/FIFAYRU29xk
 export const VIDEOS = {
+  // Cardio
+  'incline-walk': [['Incline Treadmill Walk', 'https://youtu.be/NAsObfFJXvE']],
+  'incline-walk-full': [['Full Incline Walk', 'https://youtu.be/NAsObfFJXvE']],
+  'incline-walk-fast': [['Incline Walk (3.5 mph)', 'https://youtu.be/NAsObfFJXvE']],
+  treadmill: [['Treadmill', 'https://youtu.be/HxsFneJFM2c']],
+  bike: [['Seated Bike', 'https://youtu.be/rlOOqDgDU3U']],
+  elliptical: [['Elliptical', 'https://youtu.be/sHMemwz_HPU']],
+  stairmaster: [['Stairmaster', 'https://youtu.be/R5i62iA4ONA']],
+  'outdoor-walk': [['Outdoor Walk', 'https://youtu.be/P9MiooDjeUk']],
+  'hiit-treadmill': [['HIIT Treadmill', 'https://youtu.be/dkikq_fYBNw']],
+  'hiit-elliptical': [['HIIT Elliptical', 'https://youtu.be/xDzXCpDmqhM']],
   'incline-barbell-bench': [['Incline barbell bench press', 'https://youtu.be/SrqOu55lrYU']],
   'flat-barbell-bench': [['Flat barbell bench press', 'https://youtu.be/ysUTNll8JQ8']],
   'incline-db-press': [['Incline dumbbell bench press', 'https://youtu.be/hChjZQhX1Ls']],
