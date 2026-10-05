@@ -25,20 +25,53 @@ export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/googlehealth.sleep.readonly',
 ];
 
+// What each permission brings in, for "not allowed" messages in Settings.
+const SCOPE_LABELS = {
+  [GOOGLE_SCOPES[0]]: 'steps and workouts',
+  [GOOGLE_SCOPES[1]]: 'weight and resting heart rate',
+  [GOOGLE_SCOPES[2]]: 'sleep',
+};
+
+// Sleep and exercise lists allow at most 25 per page; others go up to 10000.
+const PAGE_SIZE = { sleep: 25, exercise: 25 };
+
 const FIRST_DAYS = 30; // history pulled on the first sync
 const OVERLAP_DAYS = 3; // re-read a few days so late syncs from the watch land
 const MIN_INTERVAL_MS = 10 * 60 * 1000; // automatic syncs at most this often
 const STATE_TTL_MS = 10 * 60 * 1000;
 
+// Formats a Date as a YYYY-MM-DD string (UTC).
 const iso = (d) => d.toISOString().slice(0, 10);
+// Returns the YYYY-MM-DD date n days after the given one.
 const addDays = (date, n) => iso(new Date(Date.parse(`${date}T12:00:00Z`) + n * 86400000));
+// Turns a Google {year, month, day} date into YYYY-MM-DD, or '' if missing.
 const civil = (d) => (d && d.year ? `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}` : '');
+// Turns YYYY-MM-DD into the {year, month, day} object Google expects.
 const dateObj = (date) => {
   const [year, month, day] = date.split('-').map(Number);
   return { year, month, day };
 };
+/**
+ * Minutes asleep in one Google Health sleep session. Uses Google's summary,
+ * falling back to the stages (still processing) or the time in bed.
+ */
+export function sleepMinutes(sl) {
+  const sum = sl?.summary || {};
+  const asleep = Number(sum.minutesAsleep) || 0;
+  if (asleep) return asleep;
+  const awake = new Set(['AWAKE', 'RESTLESS', 'SLEEP_STAGE_TYPE_UNSPECIFIED']);
+  const fromSummary = (sum.stagesSummary || []).filter((x) => !awake.has(x.type)).reduce((a, x) => a + (Number(x.minutes) || 0), 0);
+  if (fromSummary) return fromSummary;
+  const fromStages = (sl?.stages || []).filter((x) => !awake.has(x.type)).reduce((a, x) => a + Math.max(0, Date.parse(x.endTime) - Date.parse(x.startTime)) / 60000, 0);
+  if (fromStages) return Math.round(fromStages);
+  const inBed = Number(sum.minutesInSleepPeriod) || Math.max(0, Date.parse(sl?.interval?.endTime) - Date.parse(sl?.interval?.startTime)) / 60000 || 0;
+  return Math.max(0, Math.round(inBed - (Number(sum.minutesAwake) || 0)));
+}
+
+// Converts a Google duration string like "3120s" into seconds.
 const seconds = (dur) => (typeof dur === 'string' && dur.endsWith('s') ? Number(dur.slice(0, -1)) || 0 : 0);
 
+// Creates the Fitbit / Google Health connection: sign-in, token storage and data import.
 export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', publicUrl = '', fetch: fetchImpl = globalThis.fetch }) {
   const file = path.join(dataDir, 'google.json');
   const pending = new Map(); // OAuth state -> expiry
@@ -46,6 +79,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
   let access = null; // { token, expires }
   let running = null;
 
+  // Reads the saved sign-in (refresh token and sync info) from google.json, if any.
   function readSaved() {
     try {
       return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -54,6 +88,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     }
   }
 
+  // Saves the sign-in to google.json (owner-only), or deletes the file when given null.
   async function writeSaved(next) {
     saved = next;
     if (!next) {
@@ -65,8 +100,10 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     await fsp.rename(tmp, file);
   }
 
+  // Tells whether the Google client id and secret are set on the server.
   const configured = () => !!(clientId && clientSecret);
 
+  // Builds the address Google sends the browser back to after sign-in.
   function redirectUri(req) {
     let base = publicUrl;
     if (!base && req) {
@@ -76,6 +113,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     return `${String(base).replace(/\/+$/, '')}/api/google/callback`;
   }
 
+  // Describes the connection for Settings without exposing any token.
   function status(req) {
     return {
       configured: configured(),
@@ -84,6 +122,8 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
       connectedAt: saved?.connectedAt || 0,
       lastSync: saved?.lastSync || 0,
       lastError: saved?.lastError || '',
+      // Permissions left unticked on Google's consent screen.
+      missing: saved?.scope ? GOOGLE_SCOPES.filter((sc) => !saved.scope.split(' ').includes(sc)).map((sc) => SCOPE_LABELS[sc]) : [],
       redirectUri: redirectUri(req),
     };
   }
@@ -108,6 +148,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     return `${AUTH_URL}?${q}`;
   }
 
+  // Posts a form to Google’s token endpoint and returns the parsed reply.
   async function tokenRequest(params) {
     const res = await fetchImpl(TOKEN_URL, {
       method: 'POST',
@@ -135,6 +176,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     await writeSaved({ refreshToken, scope: tok.scope || '', connectedAt: Date.now(), lastSync: 0, lastError: '' });
   }
 
+  // Returns a valid access token, refreshing it with the saved refresh token when needed.
   async function accessToken() {
     if (access && access.expires - 60000 > Date.now()) return access.token;
     try {
@@ -151,6 +193,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     }
   }
 
+  // Calls a Google Health API data type endpoint and returns its JSON.
   async function api(method, pathname, { query, body } = {}) {
     const token = await accessToken();
     const url = `${API}/${pathname}${query ? `?${new URLSearchParams(query)}` : ''}`;
@@ -160,6 +203,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 403) throw new Error('permission not allowed. Tap Connect and allow it on Google\'s screen.');
     if (!res.ok) throw new Error(data.error?.message || `Google Health API error ${res.status}`);
     return data;
   }
@@ -169,7 +213,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     const out = [];
     let pageToken = '';
     for (let page = 0; page < 40; page++) {
-      const data = await api('GET', `${type}/dataPoints`, { query: { filter, pageSize: '1000', ...(pageToken ? { pageToken } : {}) } });
+      const data = await api('GET', `${type}/dataPoints`, { query: { filter, pageSize: String(PAGE_SIZE[type] || 1000), ...(pageToken ? { pageToken } : {}) } });
       out.push(...(data.dataPoints || []));
       pageToken = data.nextPageToken;
       if (!pageToken) break;
@@ -182,11 +226,14 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     const days = {};
     const weights = {};
     const errors = [];
+    // Returns the import record for a date, creating it if needed.
     const day = (d) => (days[d] ||= {});
+    // Fills a field on every date in range that got no data, so stale values clear.
     const blank = (field, value) => {
       // Dates in range with no data clear that field (e.g. a deleted activity).
       for (let d = from; d <= to; d = addDays(d, 1)) if (day(d)[field] === undefined) day(d)[field] = value;
     };
+    // Runs one data kind’s import, collecting its error instead of stopping the rest.
     const step = async (name, fn) => {
       try {
         await fn();
@@ -222,8 +269,9 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
       for (const p of await list('sleep', `sleep.interval.civil_end_time >= "${from}" AND sleep.interval.civil_end_time < "${addDays(to, 1)}"`)) {
         const sl = p.sleep;
         const d = civil(sl?.interval?.civilEndTime?.date);
-        if (!d || sl.metadata?.nap) continue;
-        total[d] = (total[d] || 0) + (Number(sl.summary?.minutesAsleep) || 0);
+        // Naps don't count, but the night's main sleep always does.
+        if (!d || (sl.metadata?.nap && !sl.metadata?.mainSleep)) continue;
+        total[d] = (total[d] || 0) + sleepMinutes(sl);
       }
       for (const [d, min] of Object.entries(total)) day(d).sleepMin = min;
       blank('sleepMin', 0);
@@ -289,6 +337,7 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     return running;
   }
 
+  // Revokes the Google sign-in and forgets the saved token.
   async function disconnect() {
     if (saved?.refreshToken) {
       // Best effort: also remove the app's access on Google's side.

@@ -31,6 +31,7 @@ let holdTimer = null; // running vacuum / plank hold timer
 let pendingRender = false;
 
 const store = await createStore({
+  // Redraws after a change, waiting while the user types if the change came from a sync.
   onChange({ remote }) {
     // Drafts are dropped in render(), so ids in the DOM stay valid until the
     // page is redrawn (a sync can arrive while you're typing).
@@ -40,24 +41,31 @@ const store = await createStore({
   onSyncStatus: renderSync,
 });
 
+// Returns the current logbook state.
 const S = () => store.state;
+// Returns the chosen weight unit (lb or kg).
 const unit = () => S().settings.unit;
+// Returns the chosen distance unit (mi or km).
 const dunit = () => S().settings.distanceUnit;
 
 // ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
 
+// Escapes text so it is safe to put inside HTML.
 function esc(v) {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
 const nf = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const nf1 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+// Formats a number with up to two decimals for display.
 const fmt = (n) => nf.format(Number(n) || 0);
 const nfCompact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+// Formats a number, shortening big ones (e.g. 12.5K).
 const fmtCompact = (n) => (Math.abs(n) >= 10000 ? nfCompact.format(n) : fmt(n));
 
+// Formats seconds as a short duration like "45s", "2m 30s" or "1h 5m".
 function fmtSec(sec) {
   sec = Math.round(sec || 0);
   if (sec < 60) return `${sec}s`;
@@ -67,11 +75,13 @@ function fmtSec(sec) {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
+// Formats seconds as a clock like "1:05".
 function fmtClock(sec) {
   sec = Math.max(0, Math.round(sec));
   return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
 }
 
+// Formats minutes per mile/km as a pace like "12:30/mi".
 function fmtPace(minPerUnit) {
   if (!minPerUnit) return '–';
   const m = Math.floor(minPerUnit);
@@ -82,6 +92,7 @@ function fmtPace(minPerUnit) {
 // toLocaleDateString builds a new formatter on every call, which adds up
 // across charts and history lists; reuse one per set of options.
 const dateFormats = new Map();
+// Formats a YYYY-MM-DD date for display with the given Intl options.
 function fmtDate(iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) {
   const key = JSON.stringify(opts);
   let f = dateFormats.get(key);
@@ -89,6 +100,7 @@ function fmtDate(iso, opts = { weekday: 'short', month: 'short', day: 'numeric' 
   return f.format(M.parseISODate(iso));
 }
 
+// Returns the speed unit label for the chosen distance unit.
 const speedUnit = () => (dunit() === 'km' ? 'km/h' : 'mph');
 const CARDIO_LABEL = {
   get speed() {
@@ -99,6 +111,7 @@ const CARDIO_LABEL = {
   rounds: 'Intervals',
 };
 
+// Formats a number or a "low–high" range.
 const range = (lo, hi) => (hi && hi > lo ? `${fmt(lo)}–${fmt(hi)}` : fmt(lo));
 
 /** Cardio settings as text, e.g. "incline 12 · 3 mph" or "level 8". */
@@ -106,6 +119,7 @@ function cardioSettingsText(c) {
   return [c.incline ? `incline ${fmt(c.incline)}` : '', c.speed ? `${fmt(c.speed)} ${speedUnit()}` : '', c.level ? `level ${fmt(c.level)}` : '', c.rounds ? `${fmt(c.rounds)} intervals` : ''].filter(Boolean).join(' · ');
 }
 
+// Describes an exercise target as text, e.g. "3 × 8–10 @ 135 lb".
 function targetText(t, kind) {
   if (kind === 'cardio') {
     const bits = [`${fmt(t.minutes)} min`, cardioSettingsText(t), t.distance ? `${fmt(t.distance)} ${dunit()}` : ''];
@@ -121,12 +135,14 @@ function targetText(t, kind) {
   return s;
 }
 
+// Formats an intensity load value for an exercise kind (minutes, hold time or weight).
 function loadText(kind, v) {
   if (kind === 'cardio') return `${fmt(v)} min`;
   if (M.isHold(kind)) return fmtSec(v);
   return `${fmtCompact(v)} ${unit()}`;
 }
 
+// Shows the percent change from a previous value as an up/down badge.
 function deltaHTML(cur, prev, suffix = '') {
   if (!prev) return '';
   const pct = ((cur - prev) / prev) * 100;
@@ -135,6 +151,7 @@ function deltaHTML(cur, prev, suffix = '') {
   return `<span class="delta ${cls}">${pct > 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(1)}%${suffix}</span>`;
 }
 
+// Summarizes the sets done in an entry as text, e.g. "135×10, 155×8".
 function setSummary(entry) {
   if (entry.kind === 'cardio') {
     const c = entry.cardio;
@@ -188,11 +205,13 @@ const STEP = {
 const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level', 'rounds']);
 const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260, speed: 30, incline: 40, level: 30, rounds: 50 };
 
+// Clamps and rounds a typed or stepped value to what the field allows.
 function cleanValue(key, v) {
   v = Math.max(0, Math.min(MAX[key] ?? 100000, Number(v) || 0));
   return INTEGER.has(key) ? Math.round(v) : M.round(v, 2);
 }
 
+// Builds a −/+ stepper with a number box for any value in the app.
 function stepper({ scope, key, value, label = '', entry = '', set = '', wd = '', item = '', sm = false, placeholder = '' }) {
   const a = `data-scope="${scope}" data-key="${key}" data-entry="${esc(entry)}" data-set="${esc(set)}" data-wd="${wd}" data-item="${esc(item)}"`;
   const name = esc(label || key);
@@ -204,6 +223,7 @@ function stepper({ scope, key, value, label = '', entry = '', set = '', wd = '',
     </div></div>`;
 }
 
+// Formats a number for an input box (no thousands separators).
 function fmtInput(v) {
   return String(M.round(Number(v) || 0, 2));
 }
@@ -282,6 +302,7 @@ function changeValue(d, fn) {
 // Session editing
 // ---------------------------------------------------------------------------
 
+// Returns the session for a date, or a cached draft built from the plan.
 function dayData(date) {
   const stored = M.getSession(S(), date);
   if (stored) return { session: stored, draft: false };
@@ -289,6 +310,7 @@ function dayData(date) {
   return { session: drafts.get(date), draft: true };
 }
 
+// Changes the session for a date (storing the draft first if needed) and saves.
 function editSession(fn, date = ui.date) {
   store.update((s) => {
     let sess = M.getSession(s, date);
@@ -301,6 +323,7 @@ function editSession(fn, date = ui.date) {
   });
 }
 
+// Changes one entry of the current day’s session and saves.
 function editEntry(entryId, fn) {
   editSession((sess, s) => {
     const e = M.findEntry(sess, entryId);
@@ -312,11 +335,13 @@ function editEntry(entryId, fn) {
 // Rendering
 // ---------------------------------------------------------------------------
 
+// Tells whether the user is typing in a text field in the page or sheet.
 function isTyping() {
   const a = document.activeElement;
   return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') && ($view.contains(a) || $sheet.contains(a));
 }
 
+// Builds a key that identifies a field across re-renders, to keep focus on it.
 function focusKey(n) {
   if (!n || !$view.contains(n) || !n.dataset) return null;
   const d = n.dataset;
@@ -324,6 +349,7 @@ function focusKey(n) {
   return ['field', 'scope', 'key', 'entry', 'set', 'wd', 'item', 'ex'].map((k) => d[k] ?? '').join('|');
 }
 
+// Redraws the current tab, keeping focus and caret in the same field.
 function render() {
   pendingRender = false;
   drafts.clear();
@@ -357,6 +383,7 @@ function render() {
   if (ui.sheet) renderSheetList();
 }
 
+// Draws the charts queued by the last render.
 function drawCharts() {
   for (const c of charts) {
     const node = document.getElementById(c.id);
@@ -370,6 +397,7 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(drawCharts, 150);
 });
 
+// Updates the sync badge (and the Settings sync note) for a new sync status.
 function renderSync(status, detail) {
   const btn = document.getElementById('sync');
   const label = { local: 'This device', synced: 'Synced', syncing: 'Syncing…', offline: 'Offline', auth: 'Locked', error: 'Error' }[status] || status;
@@ -382,6 +410,7 @@ function renderSync(status, detail) {
   }
 }
 
+// Explains the current sync status in a sentence for Settings.
 function syncDetail() {
   return {
     local: 'No server detected. Your data is saved in this browser only. Download backups regularly, or run the server to sync devices.',
@@ -394,6 +423,7 @@ function syncDetail() {
 }
 
 let toastTimer;
+// Shows a short message at the bottom of the screen, optionally with an action button.
 function toast(msg, action) {
   const t = document.getElementById('toast');
   t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button" id="toast-action">${esc(action.label)}</button>` : ''}`;
@@ -424,6 +454,7 @@ try {
   /* ignore */
 }
 
+// Saves the running rest timer so it survives a reload.
 function saveRest() {
   try {
     if (rest) localStorage.setItem(REST_KEY, JSON.stringify(rest));
@@ -433,6 +464,7 @@ function saveRest() {
   }
 }
 
+// Prepares audio on a tap, since browsers only allow sound after a user gesture.
 function unlockAudio() {
   // Browsers only allow sound after a user gesture, so prepare it on taps.
   try {
@@ -443,6 +475,7 @@ function unlockAudio() {
   }
 }
 
+// Plays a few short beeps if sounds are on.
 function beep(freq = 880, count = 3) {
   if (!audio || !S().settings.restSound) return;
   try {
@@ -463,6 +496,7 @@ function beep(freq = 880, count = 3) {
   }
 }
 
+// Starts the rest timer for the given number of seconds.
 function startRest(sec, label) {
   if (!sec) return;
   rest = { endsAt: Date.now() + sec * 1000, total: sec, label, done: false };
@@ -470,12 +504,14 @@ function startRest(sec, label) {
   buildRestBar();
 }
 
+// Stops and hides the rest timer.
 function stopRest() {
   rest = null;
   saveRest();
   buildRestBar();
 }
 
+// Builds (or hides) the rest timer bar and starts its ticking.
 function buildRestBar() {
   clearInterval(restTick);
   if (!rest) {
@@ -500,6 +536,7 @@ function buildRestBar() {
   restTick = setInterval(updateRestBar, 250);
 }
 
+// Updates the rest timer countdown, and beeps and buzzes when rest is over.
 function updateRestBar() {
   if (!rest) return;
   const left = (rest.endsAt - Date.now()) / 1000;
@@ -551,6 +588,7 @@ function restAfter(entry, date = ui.date) {
 // Log view
 // ---------------------------------------------------------------------------
 
+// Builds the scale weight card for the shown day.
 function bodyWeightCard() {
   const state = S();
   const w = M.bodyWeightOn(state, ui.date);
@@ -575,12 +613,15 @@ function bodyWeightCard() {
 function healthCard() {
   const h = S().health?.[ui.date];
   if (!h || !(h.steps || h.restingHr || h.sleepMin || h.activities?.length)) return '';
+  // Converts kilometers to the chosen distance unit.
   const km = (v) => (dunit() === 'km' ? v : v * 0.621371);
+  // Builds one stat tile.
   const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
   const stats = [
     h.steps ? stat('Steps', fmt(h.steps)) : '',
     h.restingHr ? stat('Resting HR', `${h.restingHr} <small>bpm</small>`) : '',
-    h.sleepMin ? stat('Sleep', `${Math.floor(h.sleepMin / 60)}h ${h.sleepMin % 60}m`) : '',
+    // Always shown, so a night Fitbit didn't record reads as "–" rather than missing.
+    stat('Sleep', h.sleepMin ? `${Math.floor(h.sleepMin / 60)}h ${h.sleepMin % 60}m` : '–'),
   ].join('');
   const acts = (h.activities || [])
     .map((a) => {
@@ -596,6 +637,7 @@ function healthCard() {
   </section>`;
 }
 
+// Builds the Log tab for the shown day.
 function logView() {
   const state = S();
   const { session, draft } = dayData(ui.date);
@@ -700,6 +742,7 @@ function logView() {
   ${draft && session.entries.length ? '<p class="draft-note">This day follows your plan. Change anything here to adjust just this day.</p>' : ''}`;
 }
 
+// Builds the −/+ done counter for an entry.
 function counterHTML(e) {
   let done;
   let total;
@@ -718,6 +761,7 @@ function counterHTML(e) {
   </div>`;
 }
 
+// Builds the card for one exercise entry on the Log.
 function entryCard(e, index, session) {
   const count = session.entries.length;
   const ssNext = M.supersetNext(session, e.id);
@@ -762,6 +806,7 @@ function entryCard(e, index, session) {
   </article>`;
 }
 
+// Builds the RPE picker for an entry, with last time’s RPE.
 function rpeRow(e, prev) {
   if (e.kind === 'vacuum') return ''; // no effort rating for vacuums
   if (e.kind === 'cardio' && !e.cardio.done && !e.rpe) return '';
@@ -771,8 +816,10 @@ function rpeRow(e, prev) {
     ${prev?.entry.rpe ? `<span class="muted small">last ${fmt(prev.entry.rpe)}</span>` : ''}</div>`;
 }
 
+// Builds the editor for changing an entry’s target for this day only.
 function targetEditor(e, prev) {
   const t = e.target;
+  // Builds a stepper for one target field.
   const st = (key, label) => stepper({ scope: 'target', key, value: t[key] || 0, label, entry: e.id });
   let fields;
   if (e.kind === 'cardio') {
@@ -802,18 +849,22 @@ function targetEditor(e, prev) {
     <p class="hint">Changes apply to this day only and fill the sets you haven't done yet. To change it for every rotation, use “Save as my plan” or the Plan tab. Rest 0 = your default (${fmt(S().settings.restSec)}s).</p></div>`;
 }
 
+// Builds the intensity tracker comparing last time’s load with today’s.
 function intensityHTML(e, prev) {
   const done = M.entryMetrics(e, true);
   const planned = M.entryMetrics(e, false);
   const pm = prev ? M.entryMetrics(prev.entry) : null;
   const max = Math.max(pm?.load || 0, planned.load, done.load, 1);
+  // Returns a bar width as a percent of the planned/last maximum.
   const w = (v) => `${Math.min(100, (v / max) * 100).toFixed(1)}%`;
   const bodyweight = e.kind === 'strength' && !planned.topWeight && !pm?.topWeight;
   const what = e.kind === 'cardio' ? 'Duration' : M.isHold(e.kind) ? 'Total hold time' : bodyweight ? 'Total reps' : 'Load (weight × reps)';
   // Bodyweight moves (push-ups, dips…) compare reps instead of weight × reps.
   const L = (m) => (bodyweight ? m?.reps || 0 : m?.load || 0);
+  // Formats a load value, or reps for bodyweight exercises.
   const lt = (v) => (bodyweight ? `${fmt(v)} reps` : loadText(e.kind, v));
   const maxL = Math.max(L(pm), L(planned), L(done), 1);
+  // Returns a bar width as a percent of the largest load.
   const wl = (v) => `${Math.min(100, (v / maxL) * 100).toFixed(1)}%`;
 
   let foot = '';
@@ -843,8 +894,10 @@ function intensityHTML(e, prev) {
   </div>`;
 }
 
+// Builds the list of sets for a strength or hold entry.
 function setsBody(e, prev) {
   const prevDone = prev?.entry.sets?.filter((s) => s.done) || [];
+  // Returns last time’s finished sets of one set type.
   const prevByType = (type) => prevDone.filter((s) => (s.type || 'work') === type);
   const hold = M.isHold(e.kind);
   if (!e.sets.length) return '<p class="hint">No sets. Tap “+ Set” to add one.</p>';
@@ -884,8 +937,10 @@ function setsBody(e, prev) {
   return `<div class="sets">${head}${rows}</div>${legend}`;
 }
 
+// Builds the inputs for a cardio entry (minutes, distance, speed and so on).
 function cardioBody(e) {
   const c = e.cardio;
+  // Builds one labeled number field for a cardio entry.
   const field = (key, label) => `<label class="field"><span>${label}</span><input type="text" inputmode="numeric" data-field="value" data-scope="cardio" data-key="${key}" data-entry="${e.id}" data-set="" data-wd="" data-item="" value="${c[key] ? fmtInput(c[key]) : ''}" placeholder="–"></label>`;
   const settings = M.cardioFields(S(), e.exerciseId)
     .map((f) => stepper({ scope: 'cardio', key: f, value: c[f] || 0, label: CARDIO_LABEL[f], entry: e.id }))
@@ -921,6 +976,7 @@ try {
   /* ignore */
 }
 
+// Saves the running interval timer so it survives a reload.
 function saveHiit() {
   try {
     if (hiit) localStorage.setItem(HIIT_KEY, JSON.stringify(hiit));
@@ -930,10 +986,12 @@ function saveHiit() {
   }
 }
 
+// Returns how long the interval timer has run, not counting pauses (ms).
 function hiitElapsed() {
   return (hiit.pausedAt || Date.now()) - hiit.startedAt - hiit.pausedMs;
 }
 
+// Opens the interval timer setup sheet for a HIIT entry.
 function openHiitSetup(entryId) {
   if (hiit) return toast('An interval timer is already running');
   const { session } = dayData(ui.date);
@@ -947,8 +1005,10 @@ function openHiitSetup(entryId) {
   renderHiitSetup();
 }
 
+// Draws the interval timer setup sheet.
 function renderHiitSetup() {
   const { cfg, name } = ui.hiitSetup;
+  // Builds a stepper for one interval setting.
   const st = (key, label) => stepper({ scope: 'hiit', key, value: cfg[key], label });
   const total = M.hiitTotalSec(M.hiitPhases(cfg));
   $sheetPanel.innerHTML = `
@@ -962,6 +1022,7 @@ function renderHiitSetup() {
     </div>`;
 }
 
+// Keeps the screen awake (or lets it sleep again) where the browser allows it.
 async function keepAwake(on) {
   try {
     if (on && 'wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
@@ -974,6 +1035,7 @@ async function keepAwake(on) {
   }
 }
 
+// Starts the interval timer with the settings from the setup sheet.
 function startHiit() {
   const { entryId, date, cfg, name } = ui.hiitSetup;
   // Remember these settings on the entry for next time.
@@ -990,6 +1052,7 @@ function startHiit() {
   render();
 }
 
+// Builds (or hides) the interval timer bar and starts its ticking.
 function buildHiitBar() {
   clearInterval(hiitTick);
   if (!hiit) {
@@ -1014,11 +1077,13 @@ function buildHiitBar() {
   hiitTick = setInterval(updateHiitBar, 250);
 }
 
+// Beeps and buzzes for the start of a hard or easy interval.
 function hiitCue(kind) {
   vibrate(kind === 'hard' ? [300, 100, 300] : 300);
   beep(kind === 'hard' ? 1320 : 660, kind === 'hard' ? 3 : 2);
 }
 
+// Updates the interval timer bar, with cues at each switch and a 3-2-1 countdown.
 function updateHiitBar() {
   if (!hiit) return;
   const pos = M.hiitPosition(hiit.phases, hiitElapsed());
@@ -1072,6 +1137,7 @@ function finishHiit(completed) {
   toast(rounds ? `HIIT logged: ${rounds} interval${rounds === 1 ? '' : 's'}, ${minutes} min` : 'Interval timer stopped');
 }
 
+// Returns how long a given interval timer has run, not counting pauses (ms).
 function hiitElapsedOf(t) {
   return (t.pausedAt || Date.now()) - t.startedAt - t.pausedMs;
 }
@@ -1080,10 +1146,12 @@ function hiitElapsedOf(t) {
 // Plan view
 // ---------------------------------------------------------------------------
 
+// Builds the editor row for one exercise in a plan day.
 function planItemHTML(state, wd, it, i, n) {
   const ex = state.exercises[it.exerciseId];
   if (!ex || ex.deleted) return '';
   const kind = ex.kind;
+  // Builds a stepper for one plan target field.
   const st = (key, label) => stepper({ scope: 'plan', key, value: it[key] ?? M.defaultTarget(kind)[key] ?? 0, label, wd, item: it.id, sm: true });
   let grid;
   let more = '';
@@ -1121,6 +1189,7 @@ function planItemHTML(state, wd, it, i, n) {
   </div>`;
 }
 
+// Builds the Plan tab.
 function planView() {
   const state = S();
   const cycle = M.isCycle(state);
@@ -1175,6 +1244,7 @@ function planView() {
 
 const RANGES = { '1w': ['1W', 7], '4w': ['4W', 28], '3m': ['3M', 91], '6m': ['6M', 182], '1y': ['1Y', 365], all: ['All', null] };
 
+// Returns the [from, to] dates of the chosen Progress range.
 function rangeBounds() {
   const today = M.todayISO();
   const days = RANGES[ui.progress.range][1];
@@ -1208,6 +1278,7 @@ const EX_METRICS = {
   timed: HOLD_METRICS,
 };
 
+// Returns a formatter for an exercise progress metric.
 function metricFormatter(kind, key) {
   if (M.isHold(kind) && key !== 'sets') return (v) => fmtSec(v);
   if (key === 'pace') return (v) => fmtPace(v);
@@ -1221,10 +1292,12 @@ function metricFormatter(kind, key) {
   return (v) => fmt(v);
 }
 
+// Builds the body weight chart and stats for a date range.
 function bodyWeightSection(from, to) {
   const state = S();
   const list = M.bodyWeights(state, from, to);
   const latest = M.bodyWeights(state).pop();
+  // Formats a body weight, without the unit on chart axes.
   const fmtW = (v, axis) => (axis ? nf1.format(v) : `${nf1.format(v)} ${unit()}`);
   charts.push({
     id: 'chart-body',
@@ -1240,6 +1313,7 @@ function bodyWeightSection(from, to) {
     <div class="chart" id="chart-body"></div></section>`;
 }
 
+// Builds the Progress tab.
 function progressView() {
   const state = S();
   const [from, to] = rangeBounds();
@@ -1290,6 +1364,7 @@ function progressView() {
     const points = hist.map((h) => ({ x: h.date, y: mGet(h.metrics), tip: `${fmtDate(h.date)} · ${esc(fmtM(mGet(h.metrics)))}${h.entry.rpe ? ` · RPE ${fmt(h.entry.rpe)}` : ''}` })).filter((pt) => pt.y > 0 || mKey !== 'pace');
     charts.push({ id: 'chart-exercise', draw: (node) => lineChart(node, points, { fmtY: fmtM, fmtX: (pt) => fmtDate(pt.x, { month: 'short', day: 'numeric' }), emptyMsg: `No ${esc(ex.name)} logged in this range` }) });
 
+    // Finds the logged session with the best value of a metric.
     const best = (fn, cmp = (a, b) => a > b) => allHist.reduce((b, h) => (fn(h.metrics) && (!b || cmp(fn(h.metrics), fn(b.metrics))) ? h : b), null);
     let prs;
     if (ex.kind === 'strength') {
@@ -1332,6 +1407,7 @@ function progressView() {
       .map((h) => `<tr><td><button type="button" class="link-btn" data-action="open-date" data-date="${h.date}">${fmtDate(h.date)}</button></td><td>${esc(setSummary(h.entry))}</td><td class="r">${h.entry.rpe ? fmt(h.entry.rpe) : '–'}</td><td class="r">${esc(fmtM(mGet(h.metrics)))}</td></tr>`)
       .join('');
 
+    // Builds an option group of exercises for the Progress picker.
     const options = (ids, label) => (ids.length ? `<optgroup label="${label}">${ids.map((id) => `<option value="${esc(id)}" ${id === ex.id ? 'selected' : ''}>${esc(state.exercises[id].name)}</option>`).join('')}</optgroup>` : '');
     const unlogged = all.map((e) => e.id).filter((id) => !logged.includes(id));
     exSection = `
@@ -1395,6 +1471,7 @@ function progressView() {
 let google = null; // server status, see api/google/status
 let googleChecked = 0;
 
+// Describes how long ago a time was, e.g. "5 min ago".
 function agoText(t) {
   const min = Math.round((Date.now() - t) / 60000);
   if (min < 1) return 'just now';
@@ -1403,6 +1480,7 @@ function agoText(t) {
   return fmtDate(M.toISODate(new Date(t)), { month: 'short', day: 'numeric' });
 }
 
+// Builds the Fitbit card in Settings for the current connection state.
 function googleCard() {
   const g = google;
   let body;
@@ -1418,8 +1496,10 @@ function googleCard() {
       <button type="button" class="btn primary" data-action="google-connect" style="align-self:flex-start">Connect Fitbit</button>`;
   } else {
     body = `<p class="hint">Connected${g.lastSync ? ` · last import ${agoText(g.lastSync)}` : ''}. New data comes in when you open the app.</p>
+      ${g.missing?.length ? `<p class="hint warn">Google didn't allow access to your ${esc(g.missing.join(' or '))}. Tap <b>Connect again</b> and tick every box on Google's screen.</p>` : ''}
       ${g.lastError ? `<p class="hint warn">${esc(g.lastError)}</p>` : ''}
       <div class="row wrap">
+        ${g.missing?.length ? '<button type="button" class="btn sm primary" data-action="google-connect">Connect again</button>' : ''}
         <button type="button" class="btn sm" data-action="google-sync">Import now</button>
         <button type="button" class="btn sm danger" data-action="google-disconnect">Disconnect</button>
       </div>`;
@@ -1427,11 +1507,13 @@ function googleCard() {
   return `<section class="card stack" id="google-card"><h3>Fitbit</h3>${body}</section>`;
 }
 
+// Redraws just the Fitbit card in Settings.
 function renderGoogleCard() {
   const node = document.getElementById('google-card');
   if (node && !isTyping()) node.outerHTML = googleCard();
 }
 
+// Asks the server for the Fitbit connection status and updates the card.
 async function refreshGoogle() {
   if (store.status === 'local') return null;
   try {
@@ -1459,15 +1541,18 @@ async function googleImport(force = false) {
   }
 }
 
+// Checks the Fitbit connection and imports new data, at most every 10 minutes.
 async function autoGoogle() {
   if (Date.now() - googleChecked < 10 * 60 * 1000) return;
   const g = await refreshGoogle();
   if (g?.configured && g.connected && !g.needsReconnect) googleImport().catch(() => {});
 }
 
+// Builds the Settings tab.
 function settingsView() {
   const state = S();
   const st = state.settings;
+  // Builds a segmented on/off style control for a setting.
   const seg = (action, value, opts) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" data-action="${action}" data-value="${v}" aria-pressed="${String(value) === String(v)}">${l}</button>`).join('')}</div>`;
   return `
   <h2>Settings</h2>
@@ -1517,6 +1602,7 @@ function settingsView() {
 // Exercises tab: every exercise with its form videos
 // ---------------------------------------------------------------------------
 
+// Builds a tappable thumbnail for one form video.
 function videoTile([title, url]) {
   const id = youtubeId(url);
   if (!id) return '';
@@ -1525,6 +1611,7 @@ function videoTile([title, url]) {
     <span class="t">${esc(title)}</span></button>`;
 }
 
+// Builds the Exercises tab with every exercise and its form videos.
 function exercisesView() {
   const state = S();
   const { q, group } = ui.lib;
@@ -1552,6 +1639,7 @@ function exercisesView() {
     ${items || '<p class="hint">No exercises match.</p>'}`;
 }
 
+// Opens a form video in the in-app player sheet.
 function openVideo(url, title) {
   const id = youtubeId(url);
   if (!id) return;
@@ -1570,12 +1658,14 @@ const VIEWS = { log: logView, plan: planView, exercises: exercisesView, progress
 // Exercise picker sheet (add / swap / create)
 // ---------------------------------------------------------------------------
 
+// Returns the title for the exercise picker sheet.
 function sheetTitle(ctx) {
   if (ctx.mode === 'swap' || ctx.mode === 'plan-swap') return 'Swap for…';
   if (ctx.mode === 'plan') return `Add to ${M.planLabel(S(), ctx.wd)}`;
   return `Add to ${fmtDate(ui.date)}`;
 }
 
+// Opens the exercise picker sheet for adding or swapping an exercise.
 function openSheet(ctx) {
   ui.sheet = { q: '', kind: 'all', ...ctx };
   $sheetPanel.innerHTML = `
@@ -1594,12 +1684,14 @@ function openSheet(ctx) {
   setTimeout(() => q.focus(), 50);
 }
 
+// Closes the bottom sheet.
 function closeSheet() {
   ui.sheet = null;
   $sheet.hidden = true;
   $sheetPanel.innerHTML = '';
 }
 
+// Redraws the exercise picker list for the current search and filter.
 function renderSheetList() {
   const sh = ui.sheet;
   if (!sh || sh.mode === 'video' || sh.mode === 'hiit') return;
@@ -1622,6 +1714,7 @@ function renderSheetList() {
   document.getElementById('sheet-list').innerHTML = items + create || '<p class="hint">No exercises yet.</p>';
 }
 
+// Adds or swaps the picked exercise into the day or plan the sheet was opened for.
 function addExerciseToContext(exId) {
   const sh = ui.sheet;
   const state = S();
@@ -1691,6 +1784,7 @@ function addExerciseToContext(exId) {
 // Actions (clicks)
 // ---------------------------------------------------------------------------
 
+// Shows the Log for a given date.
 function goDate(date) {
   if (!M.isISODate(date)) return;
   ui.date = date;
@@ -1698,6 +1792,7 @@ function goDate(date) {
   render();
 }
 
+// Stops the vacuum / plank hold timer, logging the hold if asked.
 function stopHoldTimer(save) {
   if (!holdTimer) return;
   clearInterval(holdTimer.interval);
@@ -1722,9 +1817,11 @@ function stopHoldTimer(save) {
   if (entry) restAfter(entry, t.date);
 }
 
+// Vibrates the phone, where supported.
 const vibrate = (ms) => navigator.vibrate && navigator.vibrate(ms);
 
 const ACTIONS = {
+  // Switches to another tab.
   tab(el) {
     ui.tab = el.dataset.tab;
     history.replaceState(null, '', `#${ui.tab}`);
@@ -1732,15 +1829,20 @@ const ACTIONS = {
     if (ui.tab === 'settings') refreshGoogle();
     window.scrollTo(0, 0);
   },
+  // Moves the Log one day back or forward.
   'shift-day': (el) => goDate(M.addDays(ui.date, Number(el.dataset.delta))),
+  // Shows the Log for the tapped date.
   'go-date': (el) => goDate(el.dataset.date),
+  // Opens a past day from the Progress history on the Log.
   'open-date'(el) {
     ui.tab = 'log';
     history.replaceState(null, '', '#log');
     goDate(el.dataset.date);
     window.scrollTo(0, 0);
   },
+  // Sets the day type (training, active rest or rest).
   'day-type': (el) => editSession((s) => (s.dayType = el.dataset.type)),
+  // Handles a − or + tap on any stepper.
   step(el) {
     const delta = Number(el.dataset.delta);
     changeValue(el.dataset, (v, step) => {
@@ -1750,6 +1852,7 @@ const ACTIONS = {
     });
     vibrate(5);
   },
+  // Marks the next set done ("+") and starts rest or moves to the superset partner.
   'complete-set'(el) {
     let entry;
     editEntry(el.dataset.entry, (e) => {
@@ -1759,7 +1862,9 @@ const ACTIONS = {
     vibrate(10);
     if (entry) restAfter(entry);
   },
+  // Undoes the last finished set ("−").
   'undo-set': (el) => editEntry(el.dataset.entry, (e) => M.undoLastSet(e)),
+  // Ticks or unticks one set.
   'toggle-set'(el) {
     let entry;
     let nowDone = false;
@@ -1773,12 +1878,14 @@ const ACTIONS = {
     vibrate(10);
     if (entry && nowDone) restAfter(entry);
   },
+  // Cycles a set through work, warm-up, drop and failure.
   'set-type'(el) {
     editEntry(el.dataset.entry, (e) => {
       const x = e.sets.find((s) => s.id === el.dataset.set);
       if (x) M.cycleSetType(x);
     });
   },
+  // Adds a set to an entry.
   'add-set'(el) {
     editEntry(el.dataset.entry, (e) => {
       M.addSet(e);
@@ -1786,6 +1893,7 @@ const ACTIONS = {
       e.target.sets = M.isHold(e.kind) ? e.sets.length : M.workingSets(e).length;
     });
   },
+  // Removes a set from an entry.
   'remove-set'(el) {
     editEntry(el.dataset.entry, (e) => {
       M.removeLastSet(e);
@@ -1793,17 +1901,21 @@ const ACTIONS = {
       e.target.sets = M.isHold(e.kind) ? e.sets.length : M.workingSets(e).length;
     });
   },
+  // Marks a cardio entry done or not done.
   'cardio-done': (el) => editEntry(el.dataset.entry, (e) => (e.cardio.done = !e.cardio.done)),
+  // Sets or clears the RPE for an entry.
   rpe(el) {
     const v = Number(el.dataset.value);
     editEntry(el.dataset.entry, (e) => (e.rpe = e.rpe === v ? 0 : v));
   },
+  // Opens or closes the target editor for an entry.
   'toggle-target'(el) {
     const id = el.dataset.entry;
     if (ui.editing.has(id)) ui.editing.delete(id);
     else ui.editing.add(id);
     render();
   },
+  // Moves an entry up or down in the day.
   'move-entry'(el) {
     editSession((sess) => {
       const i = sess.entries.findIndex((e) => e.id === el.dataset.entry);
@@ -1812,6 +1924,7 @@ const ACTIONS = {
       [sess.entries[i], sess.entries[j]] = [sess.entries[j], sess.entries[i]];
     });
   },
+  // Removes an entry from the day, with an undo option.
   'remove-entry'(el) {
     const date = ui.date;
     let removed;
@@ -1827,6 +1940,7 @@ const ACTIONS = {
       });
     }
   },
+  // Opens the picker to swap an entry for a similar exercise.
   'swap-entry'(el) {
     const { session } = dayData(ui.date);
     const e = M.findEntry(session, el.dataset.entry);
@@ -1834,6 +1948,7 @@ const ACTIONS = {
     editSession(() => {});
     openSheet({ mode: 'swap', entry: el.dataset.entry, group: S().exercises[e?.exerciseId]?.group, kind: e?.kind === 'cardio' ? 'cardio' : 'all' });
   },
+  // Starts or stops the vacuum / plank hold timer.
   'hold-timer'(el) {
     const { entry, set } = el.dataset;
     if (holdTimer && holdTimer.setId === set) {
@@ -1851,6 +1966,7 @@ const ACTIONS = {
     }, 250);
     render();
   },
+  // Adds or removes 15 seconds of rest.
   'rest-add'(el) {
     if (!rest) return;
     const left = Math.max(0, rest.endsAt - Date.now());
@@ -1861,11 +1977,14 @@ const ACTIONS = {
     updateRestBar();
   },
   'rest-skip': stopRest,
+  // Opens the interval timer setup for a HIIT entry.
   'hiit-setup'(el) {
     if (hiit && hiit.entryId === el.dataset.entry) return toast('Use the timer bar to pause, skip or end');
     openHiitSetup(el.dataset.entry);
   },
+  // Starts the interval timer.
   'hiit-start': () => startHiit(),
+  // Pauses or resumes the interval timer.
   'hiit-pause'() {
     if (!hiit) return;
     if (hiit.pausedAt) {
@@ -1875,6 +1994,7 @@ const ACTIONS = {
     saveHiit();
     updateHiitBar();
   },
+  // Skips to the next interval.
   'hiit-skip'() {
     if (!hiit) return;
     const pos = M.hiitPosition(hiit.phases, hiitElapsed());
@@ -1883,9 +2003,11 @@ const ACTIONS = {
     saveHiit();
     updateHiitBar();
   },
+  // Ends the interval timer early and logs what was done.
   'hiit-end'() {
     if (hiit && confirm('End the interval timer and log the rounds you finished?')) finishHiit(false);
   },
+  // Logs today’s scale weight, starting from the last one.
   'bw-log'() {
     const prev = M.previousBodyWeight(S(), ui.date);
     if (prev) {
@@ -1898,13 +2020,17 @@ const ACTIONS = {
     render();
     document.querySelector('.bw input')?.focus();
   },
+  // Opens the picker to add an exercise to the day or a plan day.
   'open-add': (el) => openSheet({ mode: el.dataset.mode, wd: el.dataset.wd !== undefined ? Number(el.dataset.wd) : undefined }),
   'close-sheet': closeSheet,
+  // Filters the exercise picker by type.
   'sheet-kind'(el) {
     ui.sheet.kind = el.dataset.kind;
     renderSheetList();
   },
+  // Adds or swaps in the tapped exercise.
   'pick-exercise': (el) => addExerciseToContext(el.dataset.ex),
+  // Creates a new exercise with the typed name and adds it.
   'create-exercise'(el) {
     const name = ui.sheet.q.trim();
     if (!name) return;
@@ -1914,18 +2040,21 @@ const ACTIONS = {
     });
     addExerciseToContext(id);
   },
+  // Makes this day’s exercises and targets the plan for its plan day.
   'save-plan'() {
     const label = M.planLabel(S(), M.planIndex(S(), ui.date));
     if (!confirm(`Replace your ${label} plan with this day's exercises and targets? Future ${label}s you haven't started will use it.`)) return;
     store.update((s) => M.saveSessionAsPlan(s, ui.date));
     toast(`${label} plan updated`);
   },
+  // Clears everything logged for the day and starts over from the plan.
   'reset-day'() {
     if (!confirm('Clear everything logged for this day and start over from the plan?')) return;
     stopHoldTimer(false);
     store.update((s) => M.resetSession(s, ui.date));
     toast('Day reset to plan');
   },
+  // Switches between the rotation and a weekly plan.
   'plan-mode'(el) {
     const mode = el.dataset.value;
     if (mode === S().settings.planMode) return;
@@ -1940,12 +2069,14 @@ const ACTIONS = {
       s.settings.updatedAt = Date.now();
     });
   },
+  // Sets the day type of a plan day.
   'plan-type'(el) {
     store.update((s) => {
       s.plan[el.dataset.wd].dayType = el.dataset.type;
       s.plan[el.dataset.wd].updatedAt = Date.now();
     });
   },
+  // Moves an exercise up or down in a plan day.
   'plan-move'(el) {
     store.update((s) => {
       const day = s.plan[el.dataset.wd];
@@ -1956,6 +2087,7 @@ const ACTIONS = {
       day.updatedAt = Date.now();
     });
   },
+  // Removes an exercise from a plan day.
   'plan-remove'(el) {
     store.update((s) => {
       const day = s.plan[el.dataset.wd];
@@ -1963,18 +2095,21 @@ const ACTIONS = {
       day.updatedAt = Date.now();
     });
   },
+  // Shows or hides the extra options for a plan exercise.
   'plan-more'(el) {
     const id = el.dataset.item;
     if (ui.planMore.has(id)) ui.planMore.delete(id);
     else ui.planMore.add(id);
     render();
   },
+  // Links or unlinks an entry with the next one as a superset.
   'superset-entry'(el) {
     editEntry(el.dataset.entry, (e) => {
       if (e.target.supersetNext) delete e.target.supersetNext;
       else e.target.supersetNext = true;
     });
   },
+  // Links or unlinks a plan exercise with the next one as a superset.
   'plan-superset'(el) {
     store.update((s) => {
       const day = s.plan[el.dataset.wd];
@@ -1985,6 +2120,7 @@ const ACTIONS = {
       day.updatedAt = Date.now();
     });
   },
+  // Marks a plan exercise optional or required.
   'plan-optional'(el) {
     store.update((s) => {
       const day = s.plan[el.dataset.wd];
@@ -1995,33 +2131,46 @@ const ACTIONS = {
       day.updatedAt = Date.now();
     });
   },
+  // Opens the picker to swap an exercise in a plan day.
   'plan-swap'(el) {
     const it = S().plan[el.dataset.wd]?.items.find((i) => i.id === el.dataset.item);
     openSheet({ mode: 'plan-swap', wd: Number(el.dataset.wd), item: el.dataset.item, group: S().exercises[it?.exerciseId]?.group });
   },
+  // Changes the Progress time range.
   'progress-range'(el) {
     ui.progress.range = el.dataset.range;
     render();
   },
+  // Changes the metric shown on the exercise progress chart.
   'progress-metric'(el) {
     ui.progress.metric = el.dataset.metric;
     render();
   },
+  // Changes the metric shown on the activity chart.
   'progress-chart'(el) {
     ui.progress.chart = el.dataset.chart;
     render();
   },
+  // Switches between lb and kg.
   'set-unit': (el) => updateSettings({ unit: el.dataset.value }),
+  // Switches between miles and kilometers.
   'set-dunit': (el) => updateSettings({ distanceUnit: el.dataset.value }),
+  // Sets which day the week starts on.
   'set-weekstart': (el) => updateSettings({ weekStart: Number(el.dataset.value) }),
+  // Turns the automatic rest timer on or off.
   'set-autorest': (el) => updateSettings({ autoRest: el.dataset.value === 'true' }),
+  // Turns the rest-over sound on or off.
   'set-restsound': (el) => updateSettings({ restSound: el.dataset.value === 'true' }),
+  // Syncs now.
   'sync-now': () => syncNow(),
+  // Plays a form video.
   video: (el) => openVideo(el.dataset.url, el.dataset.title),
+  // Filters the Exercises tab by muscle group.
   'lib-group'(el) {
     ui.lib.group = el.dataset.group;
     render();
   },
+  // Adds an exercise from the Exercises tab to today.
   'lib-add'(el) {
     const exId = el.dataset.ex;
     const today = M.todayISO();
@@ -2031,6 +2180,7 @@ const ACTIONS = {
     }, today);
     toast(`Added ${M.exerciseName(S(), exId)} to today`);
   },
+  // Goes back to today’s Log (the Logbook logo).
   'go-home'() {
     closeSheet();
     ui.tab = 'log';
@@ -2038,12 +2188,15 @@ const ACTIONS = {
     goDate(M.todayISO());
     window.scrollTo(0, 0);
   },
+  // Downloads a full backup as JSON.
   'export-json'() {
     download(`logbook-backup-${M.todayISO()}.json`, JSON.stringify(S(), null, 2), 'application/json');
   },
+  // Downloads every logged set as a CSV file.
   'export-csv'() {
     download(`logbook-sets-${M.todayISO()}.csv`, M.toCSV(S()), 'text/csv');
   },
+  // Starts the Google sign-in to connect Fitbit.
   async 'google-connect'() {
     try {
       const { url } = await store.request('api/google/connect', { method: 'POST' });
@@ -2052,6 +2205,7 @@ const ACTIONS = {
       toast(err.message);
     }
   },
+  // Imports from Fitbit now and says what came in.
   async 'google-sync'(el) {
     el.disabled = true;
     try {
@@ -2063,6 +2217,7 @@ const ACTIONS = {
       el.disabled = false;
     }
   },
+  // Disconnects Fitbit after asking.
   async 'google-disconnect'() {
     if (!confirm('Disconnect Fitbit? Data already imported stays in your logbook.')) return;
     try {
@@ -2073,6 +2228,7 @@ const ACTIONS = {
       toast(err.message);
     }
   },
+  // Erases all data on every device after asking twice.
   'reset-all'() {
     if (!confirm('Erase ALL workouts, weigh-ins, plans and custom exercises everywhere (this device, the server and your other devices)?')) return;
     if (!confirm('Really erase everything? This cannot be undone. Download a backup first if unsure.')) return;
@@ -2089,12 +2245,14 @@ const ACTIONS = {
   },
 };
 
+// Changes settings and saves.
 function updateSettings(patch) {
   store.update((s) => {
     Object.assign(s.settings, patch, { updatedAt: Date.now() });
   });
 }
 
+// Downloads text as a file.
 function download(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement('a');
@@ -2110,6 +2268,7 @@ function download(name, text, type) {
 // Field changes (inputs)
 // ---------------------------------------------------------------------------
 
+// Changes one exercise in a plan day and saves.
 function editPlanItem(el, fn) {
   store.update((s) => {
     const day = s.plan[el.dataset.wd];
@@ -2121,6 +2280,7 @@ function editPlanItem(el, fn) {
 }
 
 const FIELDS = {
+  // Saves a number typed into a stepper box.
   value(el) {
     const raw = String(el.value).trim();
     const v = parseFloat(raw.replace(',', '.'));
@@ -2132,10 +2292,15 @@ const FIELDS = {
     if (Number.isNaN(v) && raw !== '') return render();
     changeValue(el.dataset, () => (Number.isNaN(v) ? 0 : v));
   },
+  // Shows the Log for the picked date.
   date: (el) => goDate(el.value),
+  // Renames the day.
   'session-name': (el) => editSession((s) => (s.name = el.value.trim())),
+  // Saves the day’s notes.
   'session-notes': (el) => editSession((s) => (s.notes = el.value)),
+  // Saves an entry’s notes.
   'entry-notes': (el) => editEntry(el.dataset.entry, (e) => (e.notes = el.value)),
+  // Sets which plan day the shown date is, shifting the rotation from there.
   'plan-day'(el) {
     // Re-anchor the rotation so this date is the chosen plan day.
     const idx = Number(el.value);
@@ -2148,28 +2313,33 @@ const FIELDS = {
     });
     toast(hasWork ? `Rotation updated. Today's logged sets were kept.` : `Today is now ${M.planLabel(S(), idx)}`);
   },
+  // Sets which rotation day today is.
   'cycle-today'(el) {
     store.update((s) => M.anchorCycle(s, M.todayISO(), Number(el.value)));
     toast(`Today is now ${M.planLabel(S(), Number(el.value))}`);
   },
+  // Renames a plan day.
   'plan-name'(el) {
     store.update((s) => {
       s.plan[el.dataset.wd].name = el.value.trim();
       s.plan[el.dataset.wd].updatedAt = Date.now();
     });
   },
+  // Saves a plan day’s note.
   'plan-daynote'(el) {
     store.update((s) => {
       s.plan[el.dataset.wd].note = el.value.trim().slice(0, 500);
       s.plan[el.dataset.wd].updatedAt = Date.now();
     });
   },
+  // Saves a plan exercise’s note.
   'plan-note': (el) =>
     editPlanItem(el, (it) => {
       const v = el.value.trim().slice(0, 300);
       if (v) it.note = v;
       else delete it.note;
     }),
+  // Saves a plan exercise’s pyramid rep scheme (e.g. 15/12/10).
   'plan-scheme': (el) =>
     editPlanItem(el, (it) => {
       const scheme = el.value
@@ -2183,10 +2353,12 @@ const FIELDS = {
         it.reps = scheme[0];
       } else delete it.repScheme;
     }),
+  // Copies one plan day onto another.
   'plan-copy'(el) {
     const from = Number(el.value);
     const to = Number(el.dataset.wd);
     if (el.value === '') return;
+    // Returns the name of a plan day.
     const label = (i) => M.planLabel(S(), i);
     if (S().plan[to].items.length && !confirm(`Replace ${label(to)} with a copy of ${label(from)}?`)) {
       el.value = '';
@@ -2195,12 +2367,14 @@ const FIELDS = {
     store.update((s) => M.copyPlanDay(s, from, to));
     toast(`Copied ${label(from)} to ${label(to)}`);
   },
+  // Shows the progress chart for the picked exercise.
   'progress-exercise'(el) {
     ui.progress.exerciseId = el.value;
     ui.progress.picked = true;
     ui.progress.metric = null;
     render();
   },
+  // Restores a JSON backup, merging or replacing.
   import(el) {
     const file = el.files?.[0];
     if (!file) return;
@@ -2233,6 +2407,7 @@ const FIELDS = {
 // before that, so a click first commits whatever is still pending.
 let pendingField = null;
 
+// Commits a typed value that is still waiting to be saved.
 function flushField() {
   const el = pendingField;
   pendingField = null;
@@ -2334,6 +2509,7 @@ document.addEventListener(
 // ---------------------------------------------------------------------------
 
 let manualSync = null;
+// Syncs when the user asks, then says how it went.
 function syncNow() {
   if (manualSync) return manualSync;
   manualSync = store.syncNow().then(() => {
@@ -2349,6 +2525,7 @@ const $ptr = document.getElementById('ptr');
 const PULL_TRIGGER = 70; // px of (damped) pull needed to sync
 let pull = null;
 
+// Moves and labels the pull-to-sync indicator.
 function showPull(dist, state) {
   $ptr.classList.toggle('is-ready', state === 'ready');
   $ptr.classList.toggle('is-syncing', state === 'syncing');
@@ -2358,6 +2535,7 @@ function showPull(dist, state) {
   $ptr.style.transform = `translate(-50%, ${Math.min(dist, 90) - 80}px)`;
 }
 
+// Slides the pull-to-sync indicator back out of view.
 function hidePull() {
   $ptr.classList.add('is-animating');
   showPull(0, '');
@@ -2418,6 +2596,7 @@ window.addEventListener('online', () => store.sync());
 
 // Roll "today" forward if the app was left open overnight.
 let lastToday = M.todayISO();
+// Moves "today" forward if the app was left open past midnight.
 function checkToday() {
   const t = M.todayISO();
   if (t === lastToday) return;

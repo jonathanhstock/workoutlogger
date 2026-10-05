@@ -6,8 +6,10 @@ import path from 'node:path';
 import net from 'node:net';
 import zlib from 'node:zlib';
 import { createServer } from '../server.js';
+import { GOOGLE_SCOPES, sleepMinutes } from '../google-health.js';
 import { defaultState } from '../public/js/model.js';
 
+// Starts a test server on a random port and resolves with it and its base URL.
 function start(opts) {
   return new Promise((resolve) => {
     const server = createServer(opts);
@@ -15,6 +17,7 @@ function start(opts) {
   });
 }
 
+// Makes a fresh temporary data folder for a test server.
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'logbook-test-'));
 
 describe('server without password', () => {
@@ -181,7 +184,9 @@ describe('corrupt data file', () => {
 });
 
 describe('saving', () => {
+  // Sends a logbook to the test server with PUT.
   const put = (base, body, headers = {}) => fetch(`${base}/api/state`, { method: 'PUT', headers, body: JSON.stringify(body) });
+  // Builds a default logbook with one session on the given date.
   const withSessionOn = (date, t) => {
     const s = defaultState(1);
     s.sessions[date] = { date, name: 'X', dayType: 'training', notes: '', entries: [], updatedAt: t };
@@ -231,21 +236,25 @@ describe('saving', () => {
 
 describe('Fitbit / Google Health', () => {
   const TODAY = '2026-10-05';
+  // Turns YYYY-MM-DD into a Google {year, month, day} date.
   const date = (d) => {
     const [year, month, day] = d.split('-').map(Number);
     return { year, month, day };
   };
 
-  function fakeGoogle({ expired = false } = {}) {
+  // Builds a fake Google (sign-in plus Health API) that records every call made to it.
+  function fakeGoogle({ expired = false, scope = GOOGLE_SCOPES.join(' '), sleepForbidden = false } = {}) {
     const calls = [];
+    // Builds a JSON response with the given status.
     const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    // Answers a request the way Google would for the endpoints the app uses.
     const fetch = async (url, opts = {}) => {
       const u = new URL(url);
       const body = typeof opts.body === 'string' ? opts.body : opts.body?.toString();
       calls.push({ url: u, method: opts.method || 'GET', body, auth: opts.headers?.Authorization });
       if (u.href.startsWith('https://oauth2.googleapis.com/token')) {
         const p = new URLSearchParams(body);
-        if (p.get('grant_type') === 'authorization_code') return json({ access_token: 'at1', refresh_token: 'rt-secret', expires_in: 3600, scope: 'x' });
+        if (p.get('grant_type') === 'authorization_code') return json({ access_token: 'at1', refresh_token: 'rt-secret', expires_in: 3600, scope });
         if (expired) return json({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }, 400);
         return json({ access_token: 'at2', expires_in: 3600 });
       }
@@ -254,6 +263,9 @@ describe('Fitbit / Google Health', () => {
       if (type === 'steps') return json({ rollupDataPoints: [{ civilStartTime: { date: date('2026-10-04') }, steps: { countSum: '9876' } }] });
       if (type === 'daily-resting-heart-rate') return json({ dataPoints: [{ dailyRestingHeartRate: { date: date('2026-10-04'), beatsPerMinute: '57' } }] });
       if (type === 'sleep') {
+        if (sleepForbidden) return json({ error: { message: 'Request had insufficient authentication scopes.' } }, 403);
+        // Google caps sleep pages at 25 and may reject anything larger.
+        if (u.searchParams.get('pageSize') !== '25') return json({ error: { message: 'Invalid page size' } }, 400);
         // Two pages, to check paging; a nap doesn't count.
         if (!u.searchParams.get('pageToken')) return json({ dataPoints: [{ sleep: { interval: { civilEndTime: { date: date('2026-10-04') } }, summary: { minutesAsleep: '400' }, metadata: {} } }], nextPageToken: 'p2' });
         return json({ dataPoints: [{ sleep: { interval: { civilEndTime: { date: date('2026-10-04') } }, summary: { minutesAsleep: '30' }, metadata: { nap: true } } }] });
@@ -350,6 +362,44 @@ describe('Fitbit / Google Health', () => {
     } finally {
       ctx.server.close();
     }
+  });
+
+  test('sleep the user did not allow is reported, and the rest still imports', async () => {
+    const dir = tmpDir();
+    const g = fakeGoogle({ scope: GOOGLE_SCOPES.slice(0, 2).join(' '), sleepForbidden: true });
+    const ctx = await start({ dataDir: dir, google: { clientId: 'cid', clientSecret: 'csec', publicUrl: 'https://app.example', fetch: g.fetch } });
+    try {
+      const { url } = await (await fetch(`${ctx.base}/api/google/connect`, { method: 'POST' })).json();
+      await fetch(`${ctx.base}/api/google/callback?state=${new URL(url).searchParams.get('state')}&code=c`, { redirect: 'manual' });
+      const st = await (await fetch(`${ctx.base}/api/google/sync`, { method: 'POST', body: JSON.stringify({ force: true, today: TODAY }) })).json();
+      assert.deepEqual(st.missing, ['sleep']);
+      assert.match(st.lastError, /^sleep: permission not allowed/);
+      const s = await (await fetch(`${ctx.base}/api/state`)).json();
+      assert.equal(s.health['2026-10-04'].steps, 9876);
+      assert.equal(s.health['2026-10-04'].sleepMin, undefined);
+    } finally {
+      ctx.server.close();
+    }
+  });
+
+  test('sleep minutes fall back to stages or time in bed', () => {
+    assert.equal(sleepMinutes({ summary: { minutesAsleep: '412' } }), 412);
+    // Still processing: no total yet, but a stage summary.
+    const stagesSummary = [
+      { type: 'LIGHT', minutes: '200' },
+      { type: 'DEEP', minutes: '80' },
+      { type: 'REM', minutes: '90' },
+      { type: 'AWAKE', minutes: '40' },
+    ];
+    assert.equal(sleepMinutes({ summary: { stagesSummary } }), 370);
+    const stages = [
+      { type: 'ASLEEP', startTime: '2026-10-04T05:00:00Z', endTime: '2026-10-04T09:00:00Z' },
+      { type: 'RESTLESS', startTime: '2026-10-04T09:00:00Z', endTime: '2026-10-04T09:30:00Z' },
+      { type: 'ASLEEP', startTime: '2026-10-04T09:30:00Z', endTime: '2026-10-04T12:00:00Z' },
+    ];
+    assert.equal(sleepMinutes({ stages }), 390);
+    assert.equal(sleepMinutes({ interval: { startTime: '2026-10-04T05:00:00Z', endTime: '2026-10-04T12:00:00Z' }, summary: { minutesAwake: '20' } }), 400);
+    assert.equal(sleepMinutes({}), 0);
   });
 
   test('an expired Google sign-in asks to reconnect', async () => {
