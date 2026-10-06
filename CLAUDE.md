@@ -95,6 +95,22 @@ Notes for that migration:
   iOS switch control for a haptic tick.
 - `public/js/model.js` holds all data logic and is shared by the browser, the
   server and the tests. Keep it free of DOM, storage and network code.
+- Consistency rules live in `model.js` (`dayConsistency`, `currentStreaks`,
+  `bestStreaks`, `monthGrid`, `consistencyTotals`). A workout is a finished
+  working set, or one cardio entry of `CARDIO_SESSION_MIN`+ minutes or with
+  interval rounds logged (warm-ups, the warm-up bike and vacuums don't
+  count). A day is scheduled when it isn't Rest and has a non-vacuum item,
+  so active-rest days count. A past scheduled day with no workout is missed
+  and breaks the streak; today is pending until it ends. Workouts on
+  unscheduled days count as `extra`, not toward the planned number. Rest
+  excuses a day but not its vacuums. Cardio = one such entry, core =
+  `CORE_SESSION_MIN` different Core-group exercises, vacuums = the day's
+  target holds. `STREAK_GAP_DAYS` (14) neutral days in a row end a streak.
+  Days before the first logged work are never judged. Helpers take
+  `{ today, start }` (start from `consistencyStart`, computed once per
+  render) and must never enumerate `state.sessions` per day (a Proxy test
+  checks this). Idea for later: memoize the streak up to yesterday if a
+  multi-year unbroken streak ever makes the Log feel slow.
 - Never make a page element wider than the screen (iPhone zooms out and gets stuck).
   The e2e suite checks this at 320 px and 390 px.
 - Pinch and double-tap zoom are disabled on phones on purpose (app-like feel):
@@ -117,10 +133,8 @@ Not built yet. Roughly in order of usefulness for this app.
    storage section), not the Render disk.
 4. **Planned deload weeks**: mark a rotation as lighter (e.g. 60% weight) so
    the plan pre-fills reduced loads automatically.
-5. **Streaks and consistency calendar**: month view of done / rest / missed
-   days and the daily vacuum streak.
-6. **Plate calculator**: tap a barbell weight to see plates per side.
-7. **Meal tracking**:
+5. **Plate calculator**: tap a barbell weight to see plates per side.
+6. **Meal tracking**:
    - Start with saved foods and meals, calories / protein / carbs / fat,
      daily targets as progress rings, and "repeat yesterday's meal".
    - Then food search (USDA FoodData Central, free) and barcode scanning with
@@ -129,8 +143,8 @@ Not built yet. Roughly in order of usefulness for this app.
      next to the weight trend.
    - For one person this fits in the current logbook file; Postgres is only
      needed for the multi-user case above.
-8. **Fitbit trends**: steps, resting heart rate and sleep charts in Progress,
+7. **Fitbit trends**: steps, resting heart rate and sleep charts in Progress,
    and Fitbit workouts suggested as cardio entries (data is already imported
    into `state.health`).
-9. **Apple Health sync**: needs a native iOS app; a web app can't read
+8. **Apple Health sync**: needs a native iOS app; a web app can't read
    HealthKit.

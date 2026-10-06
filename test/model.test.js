@@ -5,18 +5,20 @@ import { VIDEOS, WORKOUT_VIDEOS, EXERCISES, youtubeId } from '../public/js/progr
 
 const D1 = '2026-10-05'; // set as rotation Day 1 in these tests (a Monday)
 
+// A default logbook whose rotation starts (Day 1) on D1.
 function fresh() {
   const s = M.defaultState();
   s.settings.cycleStart = D1;
   return s;
 }
 
+// Stores a training session with the given entries on a date and returns it.
 function withSession(state, date, entries, extra = {}) {
   state.sessions[date] = { date, name: 'Test', dayType: 'training', note: '', notes: '', entries, updatedAt: 1, ...extra };
   return state.sessions[date];
 }
 
-/** sets: [weight, reps, done = true, type?] */
+/** Builds a strength entry from sets given as [weight, reps, done = true, type?]. */
 function strength(exerciseId, sets, target = { sets: sets.length, reps: 8, weight: 0 }, extra = {}) {
   return {
     id: M.uid(),
@@ -92,6 +94,7 @@ describe('the starting program', () => {
     const s = fresh();
     const days = M.planOrder(s).map((i) => s.plan[i].items.map((it) => it.exerciseId));
     assert.ok(days.every((d) => d.includes('vacuum')));
+    // How many times a week an exercise is planned, on average over the rotation.
     const perWeek = (id) => (days.filter((d) => d.includes(id)).length / 8) * 7;
     assert.ok(perWeek('incline-walk') >= 4 && perWeek('incline-walk') <= 5, `cardio ${perWeek('incline-walk')}`);
     assert.ok(perWeek('plank') >= 2 && perWeek('plank') <= 3, `core ${perWeek('plank')}`);
@@ -699,5 +702,436 @@ describe('Fitbit import', () => {
     M.setBodyWeight(s, '2026-10-04', 79.5);
     M.applyHealthImport(s, { weights: { '2026-10-04': 81000 } });
     assert.equal(M.bodyWeightOn(s, '2026-10-04'), 79.5);
+  });
+});
+
+describe('consistency', () => {
+  // The date n days after D1 (rotation Day 1).
+  const P = (n) => M.addDays(D1, n);
+  // The consistency context for a logbook seen on a given day.
+  const ctxFor = (s, today) => ({ today, start: M.consistencyStart(s) });
+  // A cardio entry of some minutes, finished or not.
+  const cardioE = (exerciseId, minutes, done = true, target = { minutes: 30 }) => ({ id: M.uid(), exerciseId, kind: 'cardio', target, notes: '', rpe: 0, cardio: { minutes, done } });
+  // A stomach vacuum entry with `done` of `total` holds finished.
+  const holds = (done, total = 5) => ({ id: M.uid(), exerciseId: 'vacuum', kind: 'vacuum', target: { sets: total, holdSec: 10 }, notes: '', rpe: 0, sets: Array.from({ length: total }, (_, i) => ({ id: M.uid(), holdSec: 10, done: i < done })) });
+  // Removes the stomach vacuums from every plan day.
+  const noVacuums = (s) => {
+    for (const k of Object.keys(s.plan)) s.plan[k] = { ...s.plan[k], items: s.plan[k].items.filter((it) => it.exerciseId !== 'vacuum') };
+  };
+  // A plank entry (3 × 45 s) with `done` holds finished.
+  const plank = (done = 1) => ({ id: M.uid(), exerciseId: 'plank', kind: 'timed', target: { sets: 3, holdSec: 45 }, notes: '', rpe: 0, sets: Array.from({ length: 3 }, (_, i) => ({ id: M.uid(), holdSec: 45, done: i < done })) });
+
+  test('the program plans cardio 5, core 3 and vacuums 8 times per rotation', () => {
+    const days = M.consistencyDays(fresh(), D1, P(7), { today: P(-1), start: null });
+    assert.equal(days.length, 8);
+    assert.ok(days.every((d) => d.scheduled));
+    assert.deepEqual(days.map((d) => d.dayType), ['training', 'training', 'training', 'active', 'training', 'training', 'training', 'active']);
+    // Indexes of the rotation days where a fact is true.
+    const where = (key) => days.flatMap((d, i) => (d[key] ? [i] : []));
+    assert.deepEqual(where('cardioPlanned'), [0, 2, 3, 5, 7]);
+    assert.deepEqual(where('corePlanned'), [2, 3, 7]);
+    assert.ok(days.every((d) => d.vacuumPlanned && d.vacuumTarget === 5));
+    assert.deepEqual(M.consistencyDays(fresh(), P(1), D1, { today: D1, start: null }), []);
+  });
+
+  test('weekly goals come from the plan', () => {
+    // Planned workouts, cardio, core and vacuum days in the week starting `from`.
+    const planned = (s, from) => {
+      const t = M.consistencyTotals(M.consistencyDays(s, from, M.addDays(from, 6), { today: D1, start: null }));
+      return [t.workouts.planned, t.cardio.planned, t.core.planned, t.vacuum.planned];
+    };
+    assert.deepEqual(planned(M.defaultState(), D1), [7, 4, 2, 7]);
+    assert.deepEqual(planned(fresh(), P(7)), [7, 5, 3, 7]);
+  });
+
+  test('warm-ups and short cardio are not a workout or a cardio session', () => {
+    const s = fresh();
+    // Today's (D1's) consistency facts.
+    const day = () => M.dayConsistency(s, D1, ctxFor(s, D1));
+    withSession(s, D1, [cardioE('bike', 5, true, { minutes: 5 })]);
+    assert.deepEqual([day().cardio, day().status], [false, 'pending']);
+    withSession(s, D1, [cardioE('incline-walk', 19)]);
+    assert.equal(day().cardio, false);
+    withSession(s, D1, [cardioE('incline-walk', 20)]);
+    assert.deepEqual([day().cardio, day().cardioMin, day().status], [true, 20, 'done']);
+    withSession(s, D1, [cardioE('incline-walk', 30, false)]);
+    assert.equal(day().cardio, false);
+    withSession(s, D1, [cardioE('bike', 10, true, { minutes: 5 }), cardioE('incline-walk', 15)]);
+    assert.equal(day().cardio, false, 'minutes are not added up across entries');
+    withSession(s, D1, [strength('row', [[50, 12, true, 'warmup'], [100, 8, false]])]);
+    assert.equal(day().status, 'pending');
+  });
+
+  test('a finished interval session counts as cardio and as a workout, even under 20 minutes', () => {
+    const s = fresh();
+    // A HIIT treadmill entry as the interval timer logs it: rounds and the timer's real minutes.
+    const hiit = (rounds, minutes, done = true, target = { minutes: 30, rounds: 6 }) => ({ ...cardioE('hiit-treadmill', minutes, done, target), cardio: { minutes, rounds, done } });
+    for (let i = 0; i <= 2; i++) withSession(s, P(i), [strength('row', [[100, 8]])]);
+    // Day 4 (active rest): the incline walk swapped for HIIT, 4 rounds in 17 minutes.
+    withSession(s, P(3), [hiit(4, 17), holds(5)], { dayType: 'active' });
+    withSession(s, P(4), [strength('row', [[100, 8]])]);
+    const ctx = ctxFor(s, P(5));
+    // The consistency facts for Day 4.
+    const day4 = () => M.dayConsistency(s, P(3), ctx);
+    assert.deepEqual([day4().status, day4().cardio, day4().cardioMin, day4().cardioPlanned], ['done', true, 17, true]);
+    assert.equal(M.currentStreaks(s, ctx).workout.count, 5);
+    assert.equal(M.bestStreaks(s, ctx).workout, 5);
+    // A short interval plan is planned cardio too.
+    withSession(s, P(3), [hiit(5, 19, true, { minutes: 15, rounds: 5 })], { dayType: 'active' });
+    assert.deepEqual([day4().cardio, day4().cardioPlanned], [true, true]);
+    // Unfinished, or a short entry without rounds (the warm-up bike), still doesn't count.
+    withSession(s, P(3), [hiit(4, 17, false)], { dayType: 'active' });
+    assert.deepEqual([day4().status, day4().cardio], ['missed', false]);
+    withSession(s, P(3), [cardioE('bike', 10, true, { minutes: 5 })], { dayType: 'active' });
+    assert.deepEqual([day4().status, day4().cardio, day4().cardioPlanned], ['missed', false, false]);
+    assert.equal(M.currentStreaks(s, ctx).workout.count, 1);
+  });
+
+  test('a core session needs three different core exercises', () => {
+    const s = fresh();
+    // Today's (D1's) consistency facts.
+    const day = () => M.dayConsistency(s, D1, ctxFor(s, D1));
+    // A finished hanging leg raise entry.
+    const legRaise = () => strength('hanging-leg-raise', [[0, 15]]);
+    withSession(s, D1, [plank(), legRaise(), holds(5)]);
+    assert.deepEqual([day().coreCount, day().core], [2, false]);
+    withSession(s, D1, [plank(), legRaise(), strength('russian-twist', [[0, 15]])]);
+    assert.deepEqual([day().coreCount, day().core], [3, true]);
+    withSession(s, D1, [plank(), legRaise(), legRaise()]);
+    assert.deepEqual([day().coreCount, day().core], [2, false]);
+    s.exercises['push-up'].group = ' core ';
+    withSession(s, D1, [plank(), legRaise(), strength('push-up', [[0, 15]])]);
+    assert.equal(day().core, true);
+
+    const f = fresh();
+    assert.deepEqual([M.isCoreExercise(f, 'plank'), M.isCoreExercise(f, 'vacuum'), M.isCoreExercise(f, 'push-up')], [true, false, false]);
+    f.exercises.plank.deleted = true;
+    assert.equal(M.isCoreExercise(f, 'plank'), true);
+  });
+
+  test("vacuums count once the day's target holds are done", () => {
+    const s = fresh();
+    withSession(s, P(-1), [holds(4)]);
+    withSession(s, D1, [holds(5)]);
+    const ctx = ctxFor(s, P(1));
+    // The vacuum status of a date.
+    const vac = (d, c = ctx) => M.dayConsistency(s, d, c).vacuum;
+    assert.equal(vac(P(-1)), 'partial');
+    assert.equal(vac(D1), 'done');
+    withSession(s, D1, [holds(5, 6)]);
+    assert.equal(vac(D1), 'partial');
+    const extra = holds(5);
+    extra.sets.push({ id: M.uid(), holdSec: 10, done: false });
+    withSession(s, D1, [extra]);
+    assert.equal(vac(D1), 'done');
+    assert.equal(vac(P(1)), 'pending');
+    assert.equal(vac(P(1), { ...ctx, today: P(2) }), 'missed');
+  });
+
+  test('day statuses: before, missed, rest, pending, future', () => {
+    const s = fresh();
+    withSession(s, P(-3), [strength('row', [[100, 8]])]);
+    s.sessions[P(-1)] = { date: P(-1), deleted: true, updatedAt: 3 };
+    withSession(s, P(-5), []);
+    const ctx = ctxFor(s, D1);
+    assert.equal(ctx.start, P(-3));
+    // The workout status of a date.
+    const status = (d) => M.dayConsistency(s, d, ctx).status;
+    assert.equal(status(P(-4)), 'before');
+    assert.equal(status(P(-2)), 'missed');
+    assert.equal(status(P(-1)), 'missed', 'a reset day falls back to the plan');
+    withSession(s, P(-2), [], { dayType: 'rest' });
+    assert.equal(status(P(-2)), 'rest');
+    assert.equal(status(D1), 'pending');
+    assert.equal(status(P(1)), 'future');
+    const active = M.dayConsistency(s, P(3), { today: P(4), start: P(-3) });
+    assert.deepEqual([active.status, active.dayType], ['missed', 'active']);
+  });
+
+  test('vacuums are tracked apart from the workout', () => {
+    const s = fresh();
+    withSession(s, P(-1), [strength('row', [[100, 8], [100, 8]]), holds(0)]);
+    let d = M.dayConsistency(s, P(-1), ctxFor(s, D1));
+    assert.deepEqual([d.status, d.vacuum], ['done', 'missed']);
+    const t = fresh();
+    withSession(t, D1, [strength('flat-press', [[100, 10, false]]), holds(5)]);
+    d = M.dayConsistency(t, D1, ctxFor(t, P(1)));
+    assert.deepEqual([d.status, d.vacuum], ['missed', 'done']);
+    withSession(t, D1, [holds(5)]);
+    d = M.dayConsistency(t, D1, ctxFor(t, P(1)));
+    assert.deepEqual([d.status, d.scheduled, d.vacuum], ['rest', false, 'done']);
+
+    // A Rest day excuses the workout but not its vacuums: first as the Log's Rest button stores it, then as a Rest plan day.
+    const r = fresh();
+    withSession(r, P(-3), [strength('row', [[100, 8]])]);
+    withSession(r, P(-2), [holds(0)], { dayType: 'rest' });
+    d = M.dayConsistency(r, P(-2), ctxFor(r, D1));
+    assert.deepEqual([d.status, d.scheduled, d.vacuumPlanned, d.vacuum], ['rest', false, true, 'missed']);
+    const i = M.planIndex(r, P(-1));
+    r.plan[i] = { ...r.plan[i], dayType: 'rest', updatedAt: 9 };
+    d = M.dayConsistency(r, P(-1), ctxFor(r, D1));
+    assert.deepEqual([d.status, d.scheduled, d.vacuumPlanned, d.vacuum], ['rest', false, true, 'missed']);
+    withSession(r, P(-1), [holds(5)], { dayType: 'rest' });
+    withSession(r, P(-2), [holds(5)], { dayType: 'rest' });
+    withSession(r, P(-3), [strength('row', [[100, 8]]), holds(5)]);
+    assert.equal(M.currentStreaks(r, ctxFor(r, D1)).vacuum.count, 3);
+    withSession(r, P(-2), [holds(0)], { dayType: 'rest' });
+    assert.equal(M.currentStreaks(r, ctxFor(r, D1)).vacuum.count, 1, 'skipped vacuums on a Rest day break the streak');
+  });
+
+  test('workouts on unscheduled days are extra and never fill the planned count', () => {
+    const s = fresh();
+    withSession(s, P(-4), [strength('row', [[100, 8]])]);
+    // P(-3) is a planned day with nothing logged.
+    withSession(s, P(-2), [strength('row', [[100, 8]])], { dayType: 'rest' });
+    withSession(s, P(-1), [strength('row', [[100, 8]])]);
+    const t = M.consistencyTotals(M.consistencyDays(s, P(-4), P(-1), ctxFor(s, D1)));
+    assert.deepEqual([t.workouts, t.missed], [{ done: 2, planned: 3, extra: 1 }, 1]);
+    assert.equal(t.workouts.done + t.missed, t.workouts.planned);
+  });
+
+  test("skipped optional exercises don't block done; started ones must be finished", () => {
+    const s = fresh();
+    withSession(s, P(-1), [strength('dips', [[0, 15], [0, 15, false]]), strength('incline-db-fly', [[30, 10, false]], { sets: 1, reps: 10, optional: true })]);
+    // The workout status of P(-1).
+    const status = () => M.dayConsistency(s, P(-1), ctxFor(s, D1)).status;
+    assert.equal(status(), 'partial');
+    s.sessions[P(-1)].entries[0].sets[1].done = true;
+    assert.equal(status(), 'done');
+    s.sessions[P(-1)].entries.push(strength('rack-pull', [[200, 5], [200, 5, false]], { sets: 2, reps: 5, optional: true }));
+    assert.equal(status(), 'partial');
+  });
+
+  test('extra work on a rest day counts but is not scheduled', () => {
+    const s = fresh();
+    withSession(s, P(-1), [strength('row', [[100, 8]])], { dayType: 'rest' });
+    const d = M.dayConsistency(s, P(-1), ctxFor(s, D1));
+    assert.deepEqual([d.status, d.scheduled], ['done', false]);
+  });
+
+  test('workout streak skips rest days and today, and breaks on a miss', () => {
+    const s = fresh();
+    for (let i = -6; i <= -1; i++) withSession(s, P(i), [strength('row', [[100, 8]])]);
+    withSession(s, P(-3), [], { dayType: 'rest' });
+    assert.deepEqual(M.currentStreaks(s, ctxFor(s, D1)).workout, { count: 5, since: P(-6), pendingToday: true, doneToday: false });
+    withSession(s, D1, [strength('row', [[100, 8]])]);
+    let w = M.currentStreaks(s, ctxFor(s, D1)).workout;
+    assert.deepEqual([w.count, w.doneToday, w.pendingToday], [6, true, false]);
+    s.sessions[P(-2)] = { date: P(-2), deleted: true, updatedAt: 9 };
+    w = M.currentStreaks(s, ctxFor(s, D1)).workout;
+    assert.equal(w.count, 2);
+    assert.equal(M.bestStreaks(s, ctxFor(s, D1)).workout, 3);
+  });
+
+  test('vacuum streak counts calendar days and today never breaks it', () => {
+    const s = fresh();
+    for (let i = -4; i <= -1; i++) withSession(s, P(i), [holds(5)]);
+    let v = M.currentStreaks(s, ctxFor(s, D1)).vacuum;
+    assert.deepEqual([v.count, v.pendingToday, v.doneToday], [4, true, false]);
+    withSession(s, D1, [holds(3)]);
+    v = M.currentStreaks(s, ctxFor(s, D1)).vacuum;
+    assert.deepEqual([v.count, v.pendingToday], [4, true]);
+    withSession(s, D1, [holds(5)]);
+    v = M.currentStreaks(s, ctxFor(s, D1)).vacuum;
+    assert.deepEqual([v.count, v.doneToday], [5, true]);
+    withSession(s, P(-2), [holds(4)]);
+    const st = M.currentStreaks(s, ctxFor(s, D1));
+    assert.equal(st.vacuum.count, 2);
+    assert.deepEqual(M.bestStreaks(s, ctxFor(s, D1)), { workout: 0, vacuum: 2 });
+    assert.equal(st.workout.count, 0, 'vacuum-only days are rest days, not workouts');
+  });
+
+  test('two weeks in a row with nothing planned or done end a streak', () => {
+    assert.equal(M.STREAK_GAP_DAYS, 14);
+    const s = fresh();
+    // A finished row session.
+    const lift = () => [strength('row', [[100, 8]])];
+    withSession(s, P(-20), lift());
+    for (let i = -19; i <= -6; i++) withSession(s, P(i), [], { dayType: 'rest' });
+    for (let i = -5; i <= -1; i++) withSession(s, P(i), lift());
+    assert.equal(M.currentStreaks(s, ctxFor(s, D1)).workout.count, 5, '14 rest days in a row end it');
+    assert.equal(M.bestStreaks(s, ctxFor(s, D1)).workout, 5);
+    withSession(s, P(-19), lift());
+    assert.equal(M.currentStreaks(s, ctxFor(s, D1)).workout.count, 7, '13 rest days in a row do not');
+    assert.equal(M.bestStreaks(s, ctxFor(s, D1)).workout, 7);
+
+    // Vacuums: days with none planned or done are neutral, up to the same limit.
+    const v = fresh();
+    noVacuums(v);
+    withSession(v, P(-20), [holds(5)]);
+    for (let i = -5; i <= -1; i++) withSession(v, P(i), [holds(5)]);
+    assert.equal(M.currentStreaks(v, ctxFor(v, D1)).vacuum.count, 5);
+    assert.equal(M.bestStreaks(v, ctxFor(v, D1)).vacuum, 5);
+    withSession(v, P(-19), [holds(5)]);
+    assert.equal(M.currentStreaks(v, ctxFor(v, D1)).vacuum.count, 7);
+    assert.equal(M.bestStreaks(v, ctxFor(v, D1)).vacuum, 7);
+  });
+
+  test('current streaks stop walking after a rotation of neutral days', () => {
+    const N = 1096; // three years
+    // Three years of sessions built by `entries(i)` (null = nothing logged), with every session lookup counted.
+    const logbook = (s, entries) => {
+      const raw = {};
+      for (let i = 1; i < N; i++) {
+        const list = entries(i);
+        if (list) raw[P(-i)] = { date: P(-i), name: 'X', dayType: 'training', note: '', notes: '', updatedAt: 1, entries: list };
+      }
+      const start = M.consistencyStart({ sessions: raw });
+      const counter = { gets: 0 };
+      s.sessions = new Proxy(raw, {
+        // Counts every date looked up.
+        get(target, key, recv) {
+          counter.gets++;
+          return Reflect.get(target, key, recv);
+        },
+      });
+      return { ctx: { today: D1, start }, counter };
+    };
+
+    // Vacuums not in the plan and never logged, and a missed workout 2 days ago.
+    const a = fresh();
+    noVacuums(a);
+    const A = logbook(a, (i) => (i === 2 ? null : [strength('row', [[100, 8]])]));
+    const ca = M.currentStreaks(a, A.ctx);
+    assert.deepEqual([ca.workout.count, ca.vacuum.count], [1, 0]);
+    assert.ok(A.counter.gets <= M.STREAK_GAP_DAYS + 1, `looked up ${A.counter.gets} dates`);
+
+    // A vacuum-only plan where every day is Rest, and vacuums missed 10 days ago.
+    const b = fresh();
+    for (const k of Object.keys(b.plan)) b.plan[k] = { name: '', dayType: 'rest', note: '', updatedAt: 5, items: [{ id: `v${k}`, exerciseId: 'vacuum', sets: 5, holdSec: 10 }] };
+    const B = logbook(b, (i) => (i === 10 ? null : [holds(5)]));
+    const cb = M.currentStreaks(b, B.ctx);
+    assert.deepEqual([cb.workout.count, cb.vacuum.count], [0, 9]);
+    assert.ok(B.counter.gets <= M.STREAK_GAP_DAYS + 1, `looked up ${B.counter.gets} dates`);
+  });
+
+  test('an empty logbook is tracked from today', () => {
+    const s = fresh();
+    const ctx = ctxFor(s, D1);
+    assert.equal(ctx.start, null);
+    const { workout, vacuum } = M.currentStreaks(s, ctx);
+    assert.deepEqual([workout.count, workout.pendingToday, vacuum.count, vacuum.pendingToday], [0, true, 0, true]);
+    assert.equal(M.dayConsistency(s, P(-1), ctx).status, 'before');
+    assert.equal(M.dayConsistency(s, D1, ctx).status, 'pending');
+    assert.deepEqual(M.bestStreaks(s, ctx), { workout: 0, vacuum: 0 });
+  });
+
+  test('the best streak survives a break', () => {
+    const s = fresh();
+    for (let i = -15; i <= -6; i++) withSession(s, P(i), [strength('row', [[100, 8]])]);
+    for (let i = -3; i <= -1; i++) withSession(s, P(i), [strength('row', [[100, 8]])]);
+    const ctx = ctxFor(s, D1);
+    assert.equal(M.currentStreaks(s, ctx).workout.count, 3);
+    assert.equal(M.bestStreaks(s, ctx).workout, 10);
+  });
+
+  test('weekly plan mode follows weekdays', () => {
+    const s = fresh();
+    s.settings.planMode = 'weekly';
+    for (let i = 0; i < 7; i++) s.plan[i] = { name: '', dayType: 'rest', note: '', items: [], updatedAt: 5 };
+    for (const i of [1, 3, 5]) {
+      s.plan[i] = { name: 'Lift', dayType: 'training', note: '', updatedAt: 5, items: [{ id: `a${i}`, exerciseId: 'row', sets: 3, reps: 8 }, { id: `b${i}`, exerciseId: 'incline-walk', minutes: 30 }, { id: `v${i}`, exerciseId: 'vacuum', sets: 5, holdSec: 10 }] };
+    }
+    const t = M.consistencyTotals(M.consistencyDays(s, D1, P(6), { today: D1, start: null }));
+    assert.deepEqual([t.workouts.planned, t.cardio.planned, t.core.planned, t.vacuum.planned], [3, 3, 0, 3]);
+    const sunday = M.dayConsistency(s, P(6), { today: P(7), start: D1 });
+    assert.deepEqual([sunday.status, sunday.vacuum], ['rest', 'none']);
+  });
+
+  test('plan edits re-colour unlogged days only', () => {
+    const s = fresh();
+    withSession(s, P(-8), [strength('row', [[100, 8]])]);
+    const ctx = ctxFor(s, D1);
+    assert.equal(M.dayConsistency(s, P(-7), ctx).status, 'missed');
+    s.plan[1] = { ...s.plan[1], dayType: 'rest', updatedAt: 9 };
+    assert.equal(M.dayConsistency(s, P(-7), ctx).status, 'rest');
+    s.plan[0] = { ...s.plan[0], dayType: 'rest', updatedAt: 9 };
+    const logged = M.dayConsistency(s, P(-8), ctx);
+    assert.deepEqual([logged.status, logged.dayType], ['done', 'training']);
+  });
+
+  test('habitPip marks each habit per day', () => {
+    const s = fresh();
+    withSession(s, P(-3), [plank(3), strength('russian-twist', [[0, 15]])], { dayType: 'active' });
+    withSession(s, P(-2), [strength('row', [[100, 8]])]);
+    const ctx = ctxFor(s, D1);
+    // Workout, cardio, core and vacuum pips for a date.
+    const pips = (d) => ['workouts', 'cardio', 'core', 'vacuum'].map((h) => M.habitPip(M.dayConsistency(s, d, ctx), h, D1));
+    assert.deepEqual(pips(P(-4)), ['none', 'none', 'none', 'none']);
+    assert.deepEqual(pips(P(-3)), ['done', 'none', 'partial', 'none']);
+    assert.deepEqual(pips(P(-2)), ['done', 'none', 'none', 'none']);
+    assert.deepEqual(pips(P(-1)), ['missed', 'missed', 'missed', 'missed']);
+    assert.deepEqual(pips(D1), ['planned', 'planned', 'none', 'planned']);
+    assert.deepEqual(pips(P(2)), ['planned', 'planned', 'planned', 'planned']);
+  });
+
+  test('monthGrid covers whole weeks from the week start', () => {
+    const s = fresh();
+    const ctx = { today: D1, start: null };
+    // Number of weeks and the first and last cell of a month's grid.
+    const shape = (ym, weekStart) => {
+      s.settings.weekStart = weekStart;
+      const g = M.monthGrid(s, ym, ctx);
+      assert.ok(g.weeks.every((w) => w.length === 7));
+      return [g.weeks.length, g.weeks[0][0].date, g.weeks.at(-1)[6].date];
+    };
+    assert.deepEqual(shape('2026-10', 1), [5, '2026-09-28', '2026-11-01']);
+    assert.deepEqual(shape('2026-10', 0), [5, '2026-09-27', '2026-10-31']);
+    assert.equal(shape('2026-11', 1)[0], 6);
+    assert.deepEqual(shape('2027-02', 1), [4, '2027-02-01', '2027-02-28']);
+    assert.equal(shape('2027-02', 0)[0], 5);
+    s.settings.weekStart = 1;
+    const first = M.monthGrid(s, '2026-10', ctx).weeks[0];
+    assert.deepEqual(first.map((c) => c.inMonth), [false, false, false, true, true, true, true]);
+    assert.deepEqual(first[0], { date: '2026-09-28', inMonth: false });
+
+    const t = fresh();
+    for (const d of ['2026-09-30', '2026-10-01', '2026-10-02']) withSession(t, d, [strength('row', [[100, 8]])]);
+    // Sep 30 is outside the month and Oct 6+ is after today, so neither counts.
+    assert.deepEqual(M.monthGrid(t, '2026-10', ctxFor(t, D1)).totals, { workouts: { done: 2, planned: 5, extra: 0 }, cardio: { done: 0, planned: 2 }, core: { done: 0, planned: 1 }, vacuum: { done: 0, planned: 3 }, missed: 2 });
+  });
+
+  test('shiftMonth wraps years', () => {
+    assert.equal(M.shiftMonth('2026-01', -1), '2025-12');
+    assert.equal(M.shiftMonth('2026-12', 1), '2027-01');
+    assert.equal(M.shiftMonth('2026-10', -13), '2025-09');
+  });
+
+  test('consistency helpers never scan the whole history', () => {
+    const N = 1461; // four years of daily sessions
+    const raw = {};
+    for (let i = 0; i < N; i++) {
+      const d = P(-i);
+      const lifts = Array.from({ length: 10 }, (_, k) => strength(k % 2 ? 'row' : 'flat-press', [[100, 8], [100, 8], [100, 8]]));
+      raw[d] = { date: d, name: 'X', dayType: 'training', note: '', notes: '', updatedAt: 1, entries: [...lifts, cardioE('incline-walk', 30), holds(5)] };
+    }
+    const s = fresh();
+    let scans = 0;
+    s.sessions = new Proxy(raw, {
+      // Counts every enumeration of the sessions map.
+      ownKeys(target) {
+        scans++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    const t0 = performance.now();
+    const start = M.consistencyStart(s);
+    assert.equal(scans, 1);
+    assert.equal(start, P(-(N - 1)));
+    const ctx = { today: D1, start };
+    const cur = M.currentStreaks(s, ctx);
+    assert.deepEqual([cur.workout.count, cur.vacuum.count], [N, N]);
+    assert.deepEqual(M.bestStreaks(s, ctx), { workout: N, vacuum: N });
+    const grid = M.monthGrid(s, '2026-10', ctx);
+    const ws = M.startOfWeek(D1, 1);
+    assert.equal(M.consistencyDays(s, ws, M.addDays(ws, 6), ctx).length, 7);
+    const ms = performance.now() - t0;
+    assert.equal(scans, 1, 'only consistencyStart enumerates the sessions');
+
+    // The month grid only depends on the days it shows.
+    const small = fresh();
+    for (let d = '2026-09-28'; d <= '2026-11-01'; d = M.addDays(d, 1)) if (raw[d]) small.sessions[d] = raw[d];
+    assert.deepEqual(M.monthGrid(small, '2026-10', ctx), grid);
+    assert.ok(ms < 500, `took ${ms.toFixed(0)} ms`);
   });
 });
