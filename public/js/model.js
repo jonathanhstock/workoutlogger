@@ -39,14 +39,17 @@ export const MAX_PLAN_DAYS = 14;
 // Small helpers
 // ---------------------------------------------------------------------------
 
+/** A short random id for new records. */
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/** The current time in milliseconds (record timestamps). */
 export function now() {
   return Date.now();
 }
 
+/** Pads a number to two digits (e.g. 7 → "07"). */
 const pad = (n) => String(n).padStart(2, '0');
 
 /** Local calendar date as YYYY-MM-DD. */
@@ -54,6 +57,7 @@ export function toISODate(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Today's local date as YYYY-MM-DD. */
 export function todayISO() {
   return toISODate(new Date());
 }
@@ -64,29 +68,35 @@ export function parseISODate(iso) {
   return new Date(y, m - 1, d, 12);
 }
 
+/** True for a real calendar date written as YYYY-MM-DD. */
 export function isISODate(s) {
   return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(parseISODate(s).getTime());
 }
 
+/** The YYYY-MM-DD date n days after (or before, for negative n) a date. */
 export function addDays(iso, n) {
   const d = parseISODate(iso);
   d.setDate(d.getDate() + n);
   return toISODate(d);
 }
 
+/** Day of the week of a date (0 = Sunday … 6 = Saturday). */
 export function weekdayOf(iso) {
   return parseISODate(iso).getDay();
 }
 
+/** The first day of the week containing a date (weeks start on `weekStart`, 0 = Sunday, 1 = Monday). */
 export function startOfWeek(iso, weekStart = 1) {
   const diff = (weekdayOf(iso) - weekStart + 7) % 7;
   return addDays(iso, -diff);
 }
 
+/** Whole days from date a to date b (negative when b is earlier). */
 export function daysBetween(a, b) {
   return Math.round((parseISODate(b) - parseISODate(a)) / 86400000);
 }
 
+/** Turns a value into a number within [min, max] (min when it isn't a number). */
 export function clampNum(v, min = 0, max = 100000) {
   const n = Number(v);
   if (!Number.isFinite(n)) return min;
@@ -99,14 +109,18 @@ export function round(n, digits = 2) {
   return Math.round(n * f) / f;
 }
 
+/** A deep copy of plain JSON data. */
 const clone = (o) => JSON.parse(JSON.stringify(o));
+/** True for a plain object (not null or an array). */
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+/** A set's type, where no type means a working set. */
 const setType = (s) => s.type || 'work';
 
 // ---------------------------------------------------------------------------
 // Default state
 // ---------------------------------------------------------------------------
 
+/** A blank plan day (a rest day with nothing planned). */
 function emptyPlanDay(ts) {
   return { name: '', dayType: 'rest', note: '', items: [], updatedAt: ts };
 }
@@ -118,6 +132,7 @@ function programDay(i, ts) {
   return { name: d.name, dayType: d.dayType, note: d.note || '', items: d.items.map((it, j) => ({ id: `p${i}-${j}`, ...clone(it) })), updatedAt: ts };
 }
 
+/** Every plan day as the program defines it. */
 function defaultPlan(ts) {
   const plan = {};
   for (let i = 0; i < MAX_PLAN_DAYS; i++) plan[i] = programDay(i, ts);
@@ -129,6 +144,7 @@ export const CARDIO_FIELDS = ['rounds', 'speed', 'incline', 'level'];
 // Custom cardio exercises (no `fields`) log these by default.
 const DEFAULT_CARDIO_FIELDS = ['speed', 'incline', 'level'];
 
+/** An exercise record built from a program.js EXERCISES row. */
 function programExercise(id, name, kind, group, extra = {}, ts = 0) {
   return {
     id,
@@ -162,6 +178,7 @@ function stamp(rec, t) {
   return rec;
 }
 
+/** Settings for a new logbook: US units and the program's rotation. */
 export function defaultSettings(ts) {
   return {
     unit: 'lb',
@@ -178,6 +195,7 @@ export function defaultSettings(ts) {
   };
 }
 
+/** A brand-new logbook with the program's exercises and plan and no workouts. */
 export function defaultState(ts = now()) {
   const exercises = {};
   for (const [id, name, kind, group, extra] of EXERCISES) exercises[id] = programExercise(id, name, kind, group, extra, ts);
@@ -192,6 +210,7 @@ export function defaultState(ts = now()) {
   };
 }
 
+/** The default target for a new exercise of a kind (sets × reps, minutes or holds). */
 export function defaultTarget(kind) {
   if (kind === 'cardio') return { minutes: 20, distance: 0 };
   if (kind === 'vacuum') return { sets: 5, holdSec: 10 };
@@ -335,6 +354,7 @@ export function normalizeState(input) {
 /** A day of Fitbit / Google Health data (imported by the server). */
 function normalizeHealth(h) {
   const out = {};
+  // Clamps a value to a whole number in [0, max].
   const int = (v, max) => Math.round(clampNum(v, 0, max));
   if (h.steps) out.steps = int(h.steps, 1000000);
   if (h.restingHr) out.restingHr = int(h.restingHr, 260);
@@ -362,6 +382,7 @@ function cleanId(v) {
   return String(v ?? '').replace(/[^\w-]/g, '').slice(0, 40) || uid();
 }
 
+/** Cleans one logged entry (sets or cardio) into a valid shape. */
 function normalizeEntry(e) {
   const kind = KINDS[e.kind] ? e.kind : 'strength';
   const out = {
@@ -412,6 +433,7 @@ function normalizeEntry(e) {
 export function mergeStates(a, b) {
   a = normalizeState(a);
   b = normalizeState(b);
+  // Picks the newer of two versions of a record.
   const pick = (x, y) => {
     if (!x) return y;
     if (!y) return x;
@@ -419,6 +441,7 @@ export function mergeStates(a, b) {
     // Same timestamp: deterministic tie-break so both sides converge.
     return JSON.stringify(x) >= JSON.stringify(y) ? x : y;
   };
+  // Merges two by-id maps record by record.
   const mergeMap = (x, y) => {
     const out = {};
     for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) out[k] = clone(pick(x[k], y[k]));
@@ -468,16 +491,19 @@ export function eraseAll(state, t = now()) {
 // Exercises
 // ---------------------------------------------------------------------------
 
+/** Exercises that aren't deleted, sorted by name. */
 export function activeExercises(state) {
   return Object.values(state.exercises)
     .filter((e) => !e.deleted)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** An exercise's name, or a placeholder for an unknown id. */
 export function exerciseName(state, id) {
   return state.exercises[id]?.name || 'Unknown exercise';
 }
 
+/** An exercise's kind (strength, cardio, vacuum or timed), strength when unknown. */
 export function exerciseKind(state, id) {
   return state.exercises[id]?.kind || 'strength';
 }
@@ -494,6 +520,7 @@ export function exerciseTarget(state, id) {
   return state.exercises[id]?.target || {};
 }
 
+/** Adds a custom exercise to the library and returns its id. */
 export function addExercise(state, { name, kind = 'strength', group = '' }) {
   const id = uid();
   state.exercises[id] = { id, name: name.trim().slice(0, 80) || 'New exercise', kind: KINDS[kind] ? kind : 'strength', group, updatedAt: now() };
@@ -504,10 +531,12 @@ export function addExercise(state, { name, kind = 'strength', group = '' }) {
 // Plan (weekly, or an N-day rotation like 3 on / 1 off)
 // ---------------------------------------------------------------------------
 
+/** True when the plan is an N-day rotation rather than a weekly plan. */
 export function isCycle(state) {
   return state.settings.planMode === 'cycle';
 }
 
+/** How many plan days there are (the rotation length, or 7 for a weekly plan). */
 export function planDayCount(state) {
   return isCycle(state) ? state.settings.cycleLength : 7;
 }
@@ -519,6 +548,7 @@ export function planIndex(state, date) {
   return (((daysBetween(state.settings.cycleStart, date) % n) + n) % n);
 }
 
+/** A plan day's label, e.g. "Day 3" or "Wednesday". */
 export function planLabel(state, idx) {
   return isCycle(state) ? `Day ${idx + 1}` : WEEKDAY_NAMES[idx];
 }
@@ -529,6 +559,7 @@ export function planOrder(state) {
   return Array.from({ length: 7 }, (_, i) => (state.settings.weekStart + i) % 7);
 }
 
+/** The plan day at an index, or a blank rest day if there is none. */
 export function planDay(state, idx) {
   return state.plan[idx] || emptyPlanDay(0);
 }
@@ -551,6 +582,7 @@ export function saveSessionAsPlan(state, date) {
   };
 }
 
+/** Copies one plan day onto another, with new item ids. */
 export function copyPlanDay(state, from, to) {
   const src = planDay(state, from);
   state.plan[to] = { name: src.name, dayType: src.dayType, note: src.note, items: src.items.map((it) => ({ ...clone(it), id: uid() })), updatedAt: now() };
@@ -560,11 +592,13 @@ export function copyPlanDay(state, from, to) {
 // Sessions (one per calendar day)
 // ---------------------------------------------------------------------------
 
+/** The stored session for a date, or null (a deleted one counts as none). */
 export function getSession(state, date) {
   const s = state.sessions[date];
   return s && !s.deleted ? s : null;
 }
 
+/** Rounds a weight to the nearest multiple of the weight step. */
 function roundToStep(v, step) {
   return step > 0 ? round(Math.round(v / step) * step, 2) : round(v, 2);
 }
@@ -592,9 +626,12 @@ export function makeEntry(state, exerciseId, target, beforeDate) {
   // Strength: pre-fill each set with what you lifted last time (progressive
   // overload starts from your real numbers), unless the plan names a weight.
   const prevDone = prev?.entry.sets?.filter((s) => s.done) || [];
+  // Last time's finished sets of one type.
   const prevOf = (type) => prevDone.filter((s) => setType(s) === type);
   const pw = prevOf('work');
+  // The i-th item of a list, or its last item when the list is shorter.
   const at = (list, i) => list[i] || list[list.length - 1];
+  // The weight for working set i: the planned weight, else last time's.
   const workWeight = (i) => t.weight || at(pw, i)?.weight || 0;
   const topWork = t.weight || pw.reduce((m, s) => Math.max(m, s.weight || 0), 0);
   const step = state.settings?.weightStep || 5;
@@ -656,6 +693,7 @@ export function resetSession(state, date) {
   state.sessions[date] = { date, deleted: true, updatedAt: now() };
 }
 
+/** The entry with an id in a session, or null. */
 export function findEntry(session, entryId) {
   return session?.entries.find((e) => e.id === entryId) || null;
 }
@@ -677,10 +715,12 @@ export function supersetPrev(session, entryId) {
   return i > 0 && session.entries[i - 1].target?.supersetNext ? session.entries[i - 1] : null;
 }
 
+/** An entry's working sets (no warm-up, drop or failure sets). */
 export function workingSets(entry) {
   return (entry.sets || []).filter((s) => setType(s) === 'work');
 }
 
+/** A new unfinished set copying another set's numbers (or the entry's target). */
 function newSetLike(entry, like) {
   if (isHold(entry.kind)) return { id: uid(), holdSec: like?.holdSec ?? entry.target.holdSec ?? 20, done: false };
   return { id: uid(), reps: like?.reps ?? entry.target.reps ?? 10, weight: like?.weight ?? entry.target.weight ?? 0, done: false };
@@ -725,6 +765,7 @@ export function setTypedCount(entry, type, n) {
   n = Math.round(clampNum(n, 0, 10));
   const key = { warmup: 'warmupSets', drop: 'dropSets', failure: 'failureSets' }[type];
   entry.target[key] = n;
+  // How many sets of this type the entry has.
   const count = () => entry.sets.filter((s) => s.type === type).length;
   const work = workingSets(entry);
   while (count() < n) {
@@ -747,6 +788,7 @@ export function cycleSetType(set) {
   else set.type = next;
 }
 
+/** Marks a set done (recording when) or not done. */
 export function markSet(set, done, at = now()) {
   set.done = done;
   if (done) set.at = at;
@@ -803,6 +845,7 @@ export const HIIT_DEFAULTS = { warmMin: 4, workSec: 45, easySec: 90, rounds: 6, 
 /** Interval timer settings for an entry: today's rounds, its target, then defaults. */
 export function hiitConfig(entry) {
   const t = entry?.target || {};
+  // A timer setting from the target, or its default.
   const pick = (k) => (t[k] !== undefined && t[k] !== null ? t[k] : HIIT_DEFAULTS[k]);
   return { warmMin: pick('warmMin'), workSec: pick('workSec') || HIIT_DEFAULTS.workSec, easySec: pick('easySec') || HIIT_DEFAULTS.easySec, rounds: entry?.cardio?.rounds || pick('rounds') || HIIT_DEFAULTS.rounds, coolMin: pick('coolMin') };
 }
@@ -836,6 +879,7 @@ export function hiitPosition(phases, elapsedMs) {
   return { index: phases.length, remaining: 0, rounds, done: true };
 }
 
+/** Total length of a HIIT session in seconds. */
 export function hiitTotalSec(phases) {
   return phases.reduce((a, p) => a + p.sec, 0);
 }
@@ -902,6 +946,7 @@ export function entryHasWork(entry) {
   return (entry.sets || []).some((s) => s.done);
 }
 
+/** True when every set of an entry (or its cardio) is done. */
 export function entryComplete(entry) {
   if (entry.kind === 'cardio') return !!entry.cardio?.done;
   return entry.sets.length > 0 && entry.sets.every((s) => s.done);
@@ -1046,9 +1091,309 @@ export function weeklySummaries(state, from, to, weekStart = 1) {
 }
 
 // ---------------------------------------------------------------------------
+// Consistency (streaks, weekly goals, month calendar)
+// ---------------------------------------------------------------------------
+// Every helper takes ctx = { today, start }: `today` from todayISO() and
+// `start` from consistencyStart(), both read once per render. Only
+// consistencyStart enumerates state.sessions; everything else looks days up
+// directly, so the cost follows the days shown (or the streak's length), not
+// the size of the history. Days before the start are never judged.
+
+/** Minutes one finished cardio entry needs to count as a cardio session (the 5–10 min warm-up never does). */
+export const CARDIO_SESSION_MIN = 20;
+/** Different core exercises (vacuums excluded) a day needs for a core session; the circuit says "pick 3–4". */
+export const CORE_SESSION_MIN = 3;
+/** Days in a row with nothing planned or done that end a streak: a full rotation, since no plan is longer than MAX_PLAN_DAYS. */
+export const STREAK_GAP_DAYS = MAX_PLAN_DAYS;
+// Vacuum holds a day needs when its vacuum entry has no target.
+const VACUUM_DEFAULT_HOLDS = 5;
+
+/**
+ * @typedef {Object} DayConsistency
+ * @property {string} date
+ * @property {'training'|'active'|'rest'} dayType   effective (session wins over plan)
+ * @property {boolean} scheduled
+ * @property {'done'|'partial'|'missed'|'pending'|'rest'|'future'|'before'} status
+ * @property {boolean} cardio  @property {boolean} cardioPlanned  @property {number} cardioMin
+ * @property {boolean} core    @property {boolean} corePlanned    @property {number} coreCount
+ * @property {'done'|'partial'|'missed'|'pending'|'none'|'future'|'before'} vacuum
+ * @property {boolean} vacuumPlanned  @property {number} vacuumHolds  @property {number} vacuumTarget
+ */
+
+/** True for an exercise in the Core group that isn't a stomach vacuum (deleted exercises keep counting for old logs). */
+export function isCoreExercise(state, id) {
+  const ex = state.exercises[id];
+  return !!ex && ex.kind !== 'vacuum' && String(ex.group || '').trim().toLowerCase() === 'core';
+}
+
+/** Earliest date with any logged work (one pass over session keys, no sort); null for an empty logbook. */
+export function consistencyStart(state) {
+  let start = null;
+  for (const d of Object.keys(state.sessions)) {
+    if (start && d >= start) continue;
+    const s = state.sessions[d];
+    if (s && !s.deleted && (s.entries || []).some(entryHasWork)) start = d;
+  }
+  return start;
+}
+
+/** The first date that is judged: the tracking start, or today when nothing (or only future days) is logged. */
+function trackFrom(ctx) {
+  return !ctx.start || ctx.start > ctx.today ? ctx.today : ctx.start;
+}
+
+/** True for a cardio session: CARDIO_SESSION_MIN+ minutes, or an interval (HIIT) session, which logs rounds (the warm-up bike has none). */
+function isCardioSession(minutes, rounds) {
+  return (minutes || 0) >= CARDIO_SESSION_MIN || (rounds || 0) > 0;
+}
+
+/** True for real training: a finished working set, or a finished cardio entry that is a cardio session (vacuums never). */
+function entryWorked(e) {
+  if (e.kind === 'vacuum') return false;
+  if (e.kind === 'cardio') return !!e.cardio?.done && isCardioSession(e.cardio.minutes, e.cardio.rounds);
+  return (e.sets || []).some((s) => s.done && setType(s) !== 'warmup');
+}
+
+/** What a list of session entries or plan items asks for: scheduled workout, cardio, core and the vacuum target. */
+function plannedFacts(state, list, kindOf, dayType) {
+  let nonVac = false;
+  let cardio = false;
+  let vac = false;
+  let vacTarget = 0;
+  const core = new Set();
+  for (const x of list) {
+    const t = x.target || x;
+    const kind = kindOf(x);
+    if (kind === 'vacuum') {
+      vac = true;
+      vacTarget = Math.max(vacTarget, t.sets ?? exerciseTarget(state, x.exerciseId).sets ?? VACUUM_DEFAULT_HOLDS);
+      continue;
+    }
+    nonVac = true;
+    // The 5-min warm-up bike is cardio too, but too short to be a cardio session.
+    const et = kind === 'cardio' ? exerciseTarget(state, x.exerciseId) : null;
+    if (et && isCardioSession(t.minutes ?? et.minutes ?? 20, t.rounds ?? et.rounds)) cardio = true;
+    if (isCoreExercise(state, x.exerciseId)) core.add(x.exerciseId);
+  }
+  const on = dayType !== 'rest';
+  return {
+    dayType,
+    scheduled: on && nonVac,
+    cardioPlanned: on && cardio,
+    corePlanned: on && core.size >= CORE_SESSION_MIN,
+    // A Rest day doesn't excuse vacuums.
+    vacuumPlanned: vac,
+    vacuumTarget: Math.max(1, vacTarget || VACUUM_DEFAULT_HOLDS),
+  };
+}
+
+/** plannedFacts for a plan day, memoized per plan index for the length of one call. */
+function planFacts(state, idx, cache) {
+  if (cache?.has(idx)) return cache.get(idx);
+  const day = planDay(state, idx);
+  const items = day.items.filter((it) => state.exercises[it.exerciseId] && !state.exercises[it.exerciseId].deleted && !it.optional);
+  const f = plannedFacts(state, items, (it) => exerciseKind(state, it.exerciseId), day.dayType || 'training');
+  cache?.set(idx, f);
+  return f;
+}
+
+/** Consistency facts for one date (see DayConsistency); `cache` memoizes plan days within one call. */
+function classifyDay(state, date, ctx, cache) {
+  // Reads only this date's session and plan day: never sessionOrDraft,
+  // makeEntry or sessionDates, which sort or scan the whole history.
+  const s = getSession(state, date);
+  const idx = planIndex(state, date);
+  const f = s ? plannedFacts(state, s.entries.filter(entryCounts), (e) => e.kind, s.dayType || planDay(state, idx).dayType || 'training') : planFacts(state, idx, cache);
+  const day = { date, ...f, status: '', cardio: false, cardioMin: 0, core: false, coreCount: 0, vacuum: '', vacuumHolds: 0 };
+  let worked = false;
+  let complete = true;
+  let counted = 0;
+  const coreIds = new Set();
+  for (const e of s ? s.entries : []) {
+    if (e.kind === 'vacuum') {
+      day.vacuumHolds += (e.sets || []).filter((x) => x.done).length;
+      continue;
+    }
+    const w = entryWorked(e);
+    if (w) worked = true;
+    // Minutes are never summed across entries: one entry must be long enough.
+    if (w && e.kind === 'cardio') {
+      day.cardio = true;
+      day.cardioMin += e.cardio.minutes;
+    }
+    if (w && isCoreExercise(state, e.exerciseId)) coreIds.add(e.exerciseId);
+    if (entryCounts(e)) {
+      counted++;
+      if (!entryComplete(e)) complete = false;
+    }
+  }
+  day.coreCount = coreIds.size;
+  day.core = coreIds.size >= CORE_SESSION_MIN;
+
+  const from = trackFrom(ctx);
+  if (date > ctx.today) day.status = 'future';
+  else if (date < from) day.status = 'before';
+  else if (worked) day.status = counted && complete ? 'done' : 'partial';
+  else if (!day.scheduled) day.status = 'rest';
+  else day.status = date === ctx.today ? 'pending' : 'missed';
+
+  const h = day.vacuumHolds;
+  if (date > ctx.today) day.vacuum = 'future';
+  else if (date < from) day.vacuum = 'before';
+  else if (h >= day.vacuumTarget) day.vacuum = 'done';
+  else if (h > 0) day.vacuum = 'partial';
+  else if (!day.vacuumPlanned) day.vacuum = 'none';
+  else day.vacuum = date === ctx.today ? 'pending' : 'missed';
+  return day;
+}
+
+/** Consistency facts for one date; ctx is { today, start } with start from consistencyStart. */
+export function dayConsistency(state, date, ctx) {
+  return classifyDay(state, date, ctx, null);
+}
+
+/** DayConsistency for every date in [from, to], oldest first, in O(days); [] when from > to. */
+export function consistencyDays(state, from, to, ctx) {
+  const cache = new Map();
+  const out = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) out.push(classifyDay(state, d, ctx, cache));
+  return out;
+}
+
+/** Done vs planned workouts (done counts scheduled days only, the rest are `extra`), cardio, core and vacuum days, plus missed days, over a list from consistencyDays. */
+export function consistencyTotals(days) {
+  const t = { workouts: { done: 0, planned: 0, extra: 0 }, cardio: { done: 0, planned: 0 }, core: { done: 0, planned: 0 }, vacuum: { done: 0, planned: 0 }, missed: 0 };
+  for (const d of days) {
+    if (d.status === 'before') continue;
+    // Future days count toward the target, so a week shows its whole plan.
+    t.workouts.planned += d.scheduled ? 1 : 0;
+    t.cardio.planned += d.cardioPlanned ? 1 : 0;
+    t.core.planned += d.corePlanned ? 1 : 0;
+    t.vacuum.planned += d.vacuumPlanned ? 1 : 0;
+    if (d.status === 'future') continue;
+    if (d.status === 'done' || d.status === 'partial') t.workouts[d.scheduled ? 'done' : 'extra']++;
+    t.cardio.done += d.cardio ? 1 : 0;
+    t.core.done += d.core ? 1 : 0;
+    t.vacuum.done += d.vacuum === 'done' ? 1 : 0;
+    t.missed += d.status === 'missed' ? 1 : 0;
+  }
+  return t;
+}
+
+/** Pip state of one habit on one day for the weekly goal rows. */
+export function habitPip(day, habit, today) {
+  if (day.status === 'before') return 'none';
+  const ahead = day.date >= today;
+  if (habit === 'workouts') {
+    if (day.status === 'done' || day.status === 'partial' || day.status === 'missed') return day.status;
+    return day.scheduled && ahead ? 'planned' : 'none';
+  }
+  if (habit === 'vacuum') {
+    if (day.vacuum === 'done' || day.vacuum === 'partial' || day.vacuum === 'missed') return day.vacuum;
+    return day.vacuumPlanned && ahead ? 'planned' : 'none';
+  }
+  const cardio = habit === 'cardio';
+  const past = day.status !== 'future';
+  if (past && (cardio ? day.cardio : day.core)) return 'done';
+  if (!cardio && past && day.coreCount > 0) return 'partial';
+  if (!(cardio ? day.cardioPlanned : day.corePlanned)) return 'none';
+  return ahead ? 'planned' : 'missed';
+}
+
+/** Current workout and vacuum streaks, walking back from today only as far as they reach (STREAK_GAP_DAYS neutral days in a row end one). */
+export function currentStreaks(state, ctx) {
+  const cache = new Map();
+  const workout = { count: 0, since: null, pendingToday: false, doneToday: false };
+  const vacuum = { count: 0, since: null, pendingToday: false, doneToday: false };
+  let w = true;
+  let v = true;
+  let wGap = 0;
+  let vGap = 0;
+  for (let d = ctx.today; w || v; d = addDays(d, -1)) {
+    const day = classifyDay(state, d, ctx, cache);
+    // Bounded by the tracking start: nothing before it is judged.
+    if (day.status === 'before') break;
+    if (w) {
+      // Workouts in a row: rest days are neutral and today is never a miss.
+      if (day.status === 'done' || day.status === 'partial') {
+        workout.count++;
+        workout.since = d;
+        wGap = 0;
+        if (d === ctx.today) workout.doneToday = true;
+      } else if (day.status === 'pending') workout.pendingToday = true;
+      else if (day.status === 'missed' || ++wGap >= STREAK_GAP_DAYS) w = false;
+    }
+    if (v) {
+      // Calendar days in a row: today not done yet never breaks it.
+      if (day.vacuum === 'done') {
+        vacuum.count++;
+        vacuum.since = d;
+        vGap = 0;
+        if (d === ctx.today) vacuum.doneToday = true;
+      } else if (d === ctx.today) vacuum.pendingToday = day.vacuumPlanned;
+      else if (day.vacuum !== 'none' || ++vGap >= STREAK_GAP_DAYS) v = false;
+    }
+  }
+  return { workout, vacuum };
+}
+
+/** Longest workout and vacuum streaks ever, in one forward pass from the tracking start (same rules as currentStreaks). */
+export function bestStreaks(state, ctx) {
+  const cache = new Map();
+  const best = { workout: 0, vacuum: 0 };
+  let wRun = 0;
+  let vRun = 0;
+  let wGap = 0;
+  let vGap = 0;
+  for (let d = trackFrom(ctx); d <= ctx.today; d = addDays(d, 1)) {
+    const day = classifyDay(state, d, ctx, cache);
+    if (day.status === 'done' || day.status === 'partial') {
+      best.workout = Math.max(best.workout, ++wRun);
+      wGap = 0;
+    } else if (day.status === 'missed' || (day.status === 'rest' && ++wGap >= STREAK_GAP_DAYS)) wRun = 0;
+    if (day.vacuum === 'done') {
+      best.vacuum = Math.max(best.vacuum, ++vRun);
+      vGap = 0;
+    } else if (d !== ctx.today && (day.vacuum !== 'none' || ++vGap >= STREAK_GAP_DAYS)) vRun = 0;
+  }
+  return best;
+}
+
+/** A 'YYYY-MM' month shifted by n months (wraps years). */
+export function shiftMonth(ym, n) {
+  const [y, m] = ym.split('-').map(Number);
+  const i = y * 12 + m - 1 + n;
+  return `${Math.floor(i / 12)}-${pad((i % 12) + 1)}`;
+}
+
+/** Whole weeks (from settings.weekStart) covering a 'YYYY-MM' month, with per-day facts and totals for in-month days up to today. */
+export function monthGrid(state, ym, ctx) {
+  const first = `${ym}-01`;
+  const last = addDays(`${shiftMonth(ym, 1)}-01`, -1);
+  const cache = new Map();
+  const weeks = [];
+  const tracked = [];
+  for (let d = startOfWeek(first, state.settings.weekStart); d <= last; ) {
+    const week = [];
+    for (let i = 0; i < 7; i++, d = addDays(d, 1)) {
+      if (d < first || d > last) {
+        week.push({ date: d, inMonth: false });
+        continue;
+      }
+      const cell = { ...classifyDay(state, d, ctx, cache), inMonth: true };
+      week.push(cell);
+      if (d <= ctx.today) tracked.push(cell);
+    }
+    weeks.push(week);
+  }
+  return { month: ym, weeks, totals: consistencyTotals(tracked) };
+}
+
+// ---------------------------------------------------------------------------
 // Body weight (daily scale weight)
 // ---------------------------------------------------------------------------
 
+/** Saves the scale weight for a date (0 clears it). */
 export function setBodyWeight(state, date, weight) {
   state.body[date] = { weight: round(clampNum(weight, 0, 2000), 2), updatedAt: now() };
 }
@@ -1061,6 +1406,7 @@ export function bodyWeights(state, from = '0000-01-01', to = '9999-12-31') {
     .map((date) => ({ date, weight: state.body[date].weight }));
 }
 
+/** The weigh-in for a date, or 0 when there is none. */
 export function bodyWeightOn(state, date) {
   const b = state.body[date];
   return b && b.weight > 0 ? b.weight : 0;
@@ -1123,6 +1469,7 @@ export function applyHealthImport(state, { days = {}, weights = {} }, t = now())
 // Export
 // ---------------------------------------------------------------------------
 
+/** One CSV cell, quoted when needed and safe from spreadsheet formulas. */
 function csvCell(v) {
   let s = String(v ?? '');
   // Text starting with = + - @ would run as a formula in Excel / Sheets.

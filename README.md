@@ -53,6 +53,12 @@ offline.
   (vacuums, planks) with a built-in timer.
 - **Progress** over 1 week, 4 weeks, 3 months, 6 months, 1 year or all time.
   Includes charts, personal records and full history.
+- **Consistency tracker.** A row under the week strip shows your workout
+  streak, vacuum streak and this week's cardio and core against your plan.
+  Progress has the full card: best streaks, this week's goals day by day, and
+  a month calendar of done / partly done / missed / rest days with a vacuum
+  dot (tap a day to open it). Rest days never break a streak; warm-ups and the
+  warm-up bike don't count as a workout.
 - **Your data is safe.** It's saved instantly on the device and synced across
   devices. The server keeps 30 days of daily backups. You can export JSON or
   CSV and restore a backup.

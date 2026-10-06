@@ -19,7 +19,8 @@ const ui = {
   editing: new Set(), // entry ids with the target editor open
   planMore: new Set(), // plan item ids with advanced options open
   lib: { q: '', group: 'All' },
-  progress: { range: '3m', exerciseId: null, picked: false, metric: null, chart: 'volume' },
+  // `month` is the consistency calendar's 'YYYY-MM'; null follows the current month.
+  progress: { range: '3m', exerciseId: null, picked: false, metric: null, chart: 'volume', month: null },
   sheet: null,
 };
 
@@ -176,12 +177,14 @@ const ICON = {
   link: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.9 12a3.1 3.1 0 0 1 3.1-3.1h4V7H7a5 5 0 0 0 0 10h4v-1.9H7A3.1 3.1 0 0 1 3.9 12zM8 13h8v-2H8zm9-6h-4v1.9h4a3.1 3.1 0 0 1 0 6.2h-4V17h4a5 5 0 0 0 0-10z" fill="currentColor"/></svg>',
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z" fill="currentColor"/></svg>',
   scale: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm7 3a6 6 0 0 0-5.7 4h3.2l2.3-2.3 1.4 1.4-.9.9h5.4A6 6 0 0 0 12 6z" fill="currentColor"/></svg>',
+  flame: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.48 12.35c-1.57-4.08-7.16-4.3-5.81-10.23.1-.44-.37-.78-.75-.55C9.29 3.71 6.68 8 8.87 13.62c.18.46-.36.89-.75.59-1.81-1.37-2-3.34-1.84-4.75.06-.52-.62-.77-.91-.34C4.69 10.16 4 11.84 4 14.37c.38 5.6 5.11 7.32 6.81 7.54 2.43.31 5.06-.14 6.95-1.87 2.08-1.93 2.84-5.01 1.72-7.69zm-9.28 5.03c1.44-.35 2.18-1.39 2.38-2.31.33-1.43-.96-2.83-.09-5.09.33 1.87 3.27 3.04 3.27 5.08.08 2.53-2.66 4.7-5.56 2.32z" fill="currentColor"/></svg>',
 };
 
 // ---------------------------------------------------------------------------
 // Steppers: one generic control for every number in the app
 // ---------------------------------------------------------------------------
 
+// Functions returning how much one −/+ tap changes each kind of value.
 const STEP = {
   weight: () => S().settings.weightStep,
   reps: () => 1,
@@ -637,6 +640,33 @@ function healthCard() {
   </section>`;
 }
 
+// Returns "1 workout" or "3 workouts": a count with the right word.
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+// Returns the data-state attribute for a streak: done today, still due today, or neither.
+const streakState = (x) => (x.doneToday ? 'data-state="done"' : x.pendingToday ? 'data-state="pending"' : '');
+// Returns the data-met attribute for a weekly goal that has been reached.
+const goalMet = (g) => (g.planned > 0 && g.done >= g.planned ? 'data-met' : '');
+
+// Builds the streak and weekly-goal row under the week strip.
+function habitRow(days, ctx) {
+  const { workout: w, vacuum: v } = M.currentStreaks(S(), ctx);
+  const t = M.consistencyTotals(days);
+  // Builds a done/planned cell for a weekly goal, or nothing when the week has neither.
+  const goal = (key, label, g) => (g.planned || g.done ? `<span class="habit" data-habit="${key}" ${goalMet(g)}><b class="num">${g.done}<span class="of">/${g.planned}</span></b><small>${label}</small></span>` : '');
+  // Describes a weekly goal for screen readers (visible words first), or nothing when the cell is left out.
+  const goalText = (label, g) => (g.planned || g.done ? ` ${g.done} of ${g.planned} ${label} this week.` : '');
+  const wNote = w.doneToday ? ', done today' : w.pendingToday ? (w.count ? ', log a workout today to keep it going' : ', log a workout today to start a streak') : '';
+  const vNote = v.doneToday ? ', done today' : v.pendingToday ? ', not done yet today' : '';
+  // Starts with the visible text ("2 streak", "3 vacuum days", "1/4 cardio") so voice control can tap it by what it shows.
+  const label = `${w.count} streak, ${plural(w.count, 'workout', 'workouts')} in a row${wNote}. ${v.count} vacuum days in a row${vNote}.${goalText('cardio', t.cardio)}${goalText('core', t.core)} Opens the consistency calendar.`;
+  return `<button type="button" class="habits" data-action="open-consistency" aria-label="${esc(label)}">
+    <span class="habit" data-habit="streak" ${streakState(w)}><b class="num">${ICON.flame}${w.count}</b><small>streak</small></span>
+    <span class="habit" data-habit="vacuum" ${streakState(v)}><b class="num">${v.count}</b><small>vacuum days</small></span>
+    ${goal('cardio', 'cardio', t.cardio)}
+    ${goal('core', 'core', t.core)}
+  </button>`;
+}
+
 // Builds the Log tab for the shown day.
 function logView() {
   const state = S();
@@ -645,10 +675,18 @@ function logView() {
   const ws = M.startOfWeek(ui.date, state.settings.weekStart);
   const idx = M.planIndex(state, ui.date);
   const cycle = M.isCycle(state);
+  const ctx = { today, start: M.consistencyStart(state) };
+  const cdays = M.consistencyDays(state, ws, M.addDays(ws, 6), ctx);
+  // The streak and goal row only describes the current week.
+  const thisWeek = ws === M.startOfWeek(today, state.settings.weekStart);
 
   const week = Array.from({ length: 7 }, (_, i) => {
     const d = M.addDays(ws, i);
-    const st = M.dayStatus(state, d);
+    const base = M.dayStatus(state, d);
+    // Tracked days follow the consistency tracker, so the dot never contradicts the streak or the calendar
+    // (vacuums alone don't make a workout day partial, and skipped vacuums don't stop it being done).
+    const c = cdays[i].status;
+    const st = c === 'pending' ? 'planned' : c === 'done' || c === 'partial' || c === 'missed' || c === 'rest' ? c : base;
     const label = cycle ? `D${M.planIndex(state, d) + 1}` : M.WEEKDAY_SHORT[M.weekdayOf(d)][0];
     return `<button type="button" data-action="go-date" data-date="${d}" data-status="${st}" class="${d === today ? 'is-today' : ''}" ${d === ui.date ? 'aria-current="date"' : ''} aria-label="${fmtDate(d, { weekday: 'long', month: 'long', day: 'numeric' })}, ${st}">
       <span class="wd">${cycle ? M.WEEKDAY_SHORT[M.weekdayOf(d)][0] : label}</span><span class="dn">${M.parseISODate(d).getDate()}</span>${cycle ? `<span class="cd">${label}</span>` : ''}<i class="st"></i></button>`;
@@ -709,6 +747,7 @@ function logView() {
     <button type="button" class="icon-btn" data-action="shift-day" data-delta="1" aria-label="Next day">${ICON.right}</button>
   </section>
   <nav class="weekstrip" aria-label="This week">${week}</nav>
+  ${thisWeek ? habitRow(cdays, ctx) : ''}
 
   ${bodyWeightCard()}
   ${healthCard()}
@@ -1313,6 +1352,103 @@ function bodyWeightSection(from, to) {
     <div class="chart" id="chart-body"></div></section>`;
 }
 
+const CAL_STATUS = { done: 'done', partial: 'partly done', missed: 'missed', pending: 'not done yet', rest: 'rest day', future: 'coming up', before: 'before tracking started' };
+const GOALS = [
+  ['workouts', 'Workouts'],
+  ['cardio', 'Cardio'],
+  ['core', 'Core'],
+  ['vacuum', 'Vacuums'],
+];
+
+// Describes a calendar day for screen readers.
+function calDayLabel(day, today) {
+  const head = `${fmtDate(day.date, { weekday: 'long', month: 'long', day: 'numeric' })}${day.date === today ? ' (today)' : ''}: ${CAL_STATUS[day.status]}`;
+  if (day.status === 'before' || day.status === 'future') return head;
+  const vac = { done: 'vacuums done', partial: `vacuums ${day.vacuumHolds} of ${day.vacuumTarget}`, missed: 'vacuums missed', pending: 'vacuums not done yet' }[day.vacuum];
+  const bits = [day.cardio ? `cardio ${fmt(day.cardioMin)} min` : '', day.core ? 'core' : '', vac || ''].filter(Boolean);
+  return bits.length ? `${head}, ${bits.join(', ')}` : head;
+}
+
+// Builds the Consistency card on the Progress tab: streaks, this week's goals and a month calendar.
+function consistencyCard() {
+  const state = S();
+  const today = M.todayISO();
+  const ctx = { today, start: M.consistencyStart(state) };
+  const cur = today.slice(0, 7);
+  const min = (ctx.start && ctx.start < today ? ctx.start : today).slice(0, 7);
+  const asked = ui.progress.month || cur;
+  const ym = asked > cur ? cur : asked < min ? min : asked;
+  // Keep the shown month, so Previous / Next step from what's on screen.
+  ui.progress.month = ym === cur ? null : ym;
+  const { workout: w, vacuum: v } = M.currentStreaks(state, ctx);
+  const best = M.bestStreaks(state, ctx);
+  const weekStart = state.settings.weekStart;
+  const ws = M.startOfWeek(today, weekStart);
+  const wk = M.consistencyDays(state, ws, M.addDays(ws, 6), ctx);
+  const tot = M.consistencyTotals(wk);
+  const grid = M.monthGrid(state, ym, ctx);
+
+  // Adds the best streak to a tile's sub-line, or "your best yet" when this is it.
+  const bestNote = (x, b) => (x.count === b && x.count >= 3 ? ' · your best yet' : b > 0 ? ` · best ${b}` : '');
+  const wSub = (w.pendingToday ? (w.count ? 'Log a workout today to keep it going' : 'Log a workout today to start one') : w.doneToday ? 'Done today' : "Rest days don't break it") + bestNote(w, best.workout);
+  const vSub = (v.doneToday ? 'Done today' : v.pendingToday ? 'Not done yet today' : 'No vacuums planned today') + bestNote(v, best.vacuum);
+
+  const goals = GOALS.map(([key, label]) => {
+    const g = tot[key];
+    // Workouts on unscheduled days are shown apart, so "n/n" only means every planned day was done.
+    const extra = g.extra || 0;
+    if (!g.planned && !g.done && !extra) return '';
+    const pips = wk.map((d) => `<i class="pip" data-pip="${M.habitPip(d, key, today)}"></i>`).join('');
+    const k = extra && g.planned ? `${label} <small class="muted">+${extra}<span class="xw"> extra</span></small>` : label;
+    return `<div class="goal" data-goal="${key}" ${goalMet(g)}><span class="k">${k}</span><span class="pips" aria-hidden="true">${pips}</span><b class="num">${g.planned ? `${g.done}/${g.planned}` : g.done + extra}</b></div>`;
+  }).join('');
+
+  const head = Array.from({ length: 7 }, (_, i) => `<span class="wd" aria-hidden="true">${M.WEEKDAY_SHORT[(weekStart + i) % 7][0]}</span>`).join('');
+  const cells = grid.weeks
+    .flat()
+    .map((day) => {
+      if (!day.inMonth) return '<span class="cal-day out" aria-hidden="true"></span>';
+      const vac = day.vacuum === 'done' || day.vacuum === 'partial' ? day.vacuum : '';
+      return `<button type="button" class="cal-day" data-action="open-date" data-date="${day.date}" data-status="${day.status}" data-vac="${vac}" ${day.date === today ? 'aria-current="date"' : ''} aria-label="${esc(calDayLabel(day, today))}"><span class="dn">${M.parseISODate(day.date).getDate()}</span><i class="vac"></i></button>`;
+    })
+    .join('');
+
+  const mt = grid.totals;
+  // Formats a done/planned pair for the month summary, or nothing when both are 0.
+  const pair = (label, g) => (g.planned || g.done ? ` · ${label} ${g.done}/${g.planned}` : '');
+  const summary = !ctx.start
+    ? 'Log your first workout to start tracking. Days before your first log never count as missed.'
+    : `${fmtDate(`${ym}-01`, { month: 'long' })}${ym === cur ? ' so far' : ''}: ${mt.workouts.done} of ${mt.workouts.planned} workouts${mt.workouts.extra ? ` · ${mt.workouts.extra} extra` : ''}${mt.missed ? ` · ${mt.missed} missed` : ''}${pair('cardio', mt.cardio)}${pair('core', mt.core)} · vacuums ${mt.vacuum.done}/${mt.vacuum.planned}`;
+  const rules = `A workout counts once you finish a working set (warm-ups don't count), ${M.CARDIO_SESSION_MIN}+ minutes of cardio in one go or an interval session, so the warm-up bike alone doesn't. Partly done still keeps your streak. Rest days never break it, unless ${M.STREAK_GAP_DAYS} days in a row pass with nothing planned or done; a past workout day with nothing logged does, and today only counts as missed once it's over. To excuse a day (sick, travelling), open it on the Log and set it to Rest; vacuums are still due. Workouts on Rest days show as extra. Cardio counts at ${M.CARDIO_SESSION_MIN}+ minutes in one entry or a finished interval session, core with ${M.CORE_SESSION_MIN}+ different core exercises, and vacuums once you've done the day's planned holds. Weekly goals come from your plan. Days before your first log are never counted.`;
+
+  return `<section class="card stack consistency" id="consistency" aria-labelledby="consistency-h">
+    <h3 id="consistency-h">Consistency</h3>
+    <div class="streaks">
+      <div class="stat" data-streak="workout" ${streakState(w)}><div class="k">Workout streak</div><div class="v">${w.count}<small> in a row</small></div><div class="sub">${esc(wSub)}</div></div>
+      <div class="stat" data-streak="vacuum" ${streakState(v)}><div class="k">Vacuum streak</div><div class="v">${v.count}<small> ${v.count === 1 ? 'day' : 'days'}</small></div><div class="sub">${esc(vSub)}</div></div>
+    </div>
+    <div class="goals stack">
+      <div class="spread"><span class="label">This week</span><span class="muted small">${fmtDate(ws, { month: 'short', day: 'numeric' })} – ${fmtDate(M.addDays(ws, 6), { month: 'short', day: 'numeric' })}</span></div>
+      ${goals}
+    </div>
+    <div class="cal-nav">
+      <button type="button" class="icon-btn" data-action="cal-month" data-delta="-1" aria-label="Previous month" ${ym <= min ? 'disabled' : ''}>${ICON.left}</button>
+      <h4 id="cal-title">${fmtDate(`${ym}-01`, { month: 'long', year: 'numeric' })}</h4>
+      <button type="button" class="icon-btn" data-action="cal-month" data-delta="1" aria-label="Next month" ${ym >= cur ? 'disabled' : ''}>${ICON.right}</button>
+    </div>
+    <div class="cal" role="group" aria-labelledby="cal-title">${head}${cells}</div>
+    <ul class="cal-legend">
+      <li><i class="cal-sw" data-status="done"></i>Done</li>
+      <li><i class="cal-sw" data-status="partial"></i>Partly</li>
+      <li><i class="cal-sw" data-status="missed"></i>Missed</li>
+      <li><i class="cal-sw" data-status="rest"></i>Rest</li>
+      <li><i class="cal-sw vac-sw"></i>Vacuums done</li>
+    </ul>
+    <p class="hint">${esc(summary)}</p>
+    <details class="rules"><summary>How it counts</summary><p>${esc(rules)}</p></details>
+  </section>`;
+}
+
 // Builds the Progress tab.
 function progressView() {
   const state = S();
@@ -1446,6 +1582,8 @@ function progressView() {
     <div class="stat"><div class="k">Cardio</div><div class="v">${fmt(Math.round(sum.cardioMin))}<span class="small muted"> min</span></div>${sum.distance ? `<div class="muted small">${fmt(sum.distance)} ${dunit()}</div>` : ''}</div>
     <div class="stat"><div class="k">Vacuum</div><div class="v">${fmtSec(sum.vacuumSec)}</div><div class="muted small">${fmt(sum.vacuumSets)} holds</div></div>
   </div>
+
+  ${consistencyCard()}
 
   ${bodyWeightSection(from, to)}
 
@@ -2024,7 +2162,27 @@ const ACTIONS = {
   'shift-day': (el) => goDate(M.addDays(ui.date, Number(el.dataset.delta))),
   // Shows the Log for the tapped date.
   'go-date': (el) => goDate(el.dataset.date),
-  // Opens a past day from the Progress history on the Log.
+  // Opens the consistency card on the Progress tab.
+  'open-consistency'() {
+    ui.tab = 'progress';
+    history.replaceState(null, '', '#progress');
+    ui.progress.month = null;
+    render();
+    document.getElementById('consistency')?.scrollIntoView({ block: 'start' });
+  },
+  // Shows the previous or next month in the consistency calendar.
+  'cal-month'(el) {
+    const delta = el.dataset.delta;
+    const cur = M.todayISO().slice(0, 7);
+    const next = M.shiftMonth(ui.progress.month || cur, Number(delta));
+    // The view keeps it from going before the first logged month.
+    ui.progress.month = next >= cur ? null : next;
+    render();
+    // Keep focus on the same arrow, or on the other one once this end is reached.
+    const same = $view.querySelector(`[data-action="cal-month"][data-delta="${delta}"]`);
+    (same && !same.disabled ? same : $view.querySelector('[data-action="cal-month"]:not(:disabled)'))?.focus({ preventScroll: true });
+  },
+  // Opens a past day (from the Progress history or calendar) on the Log.
   'open-date'(el) {
     ui.tab = 'log';
     history.replaceState(null, '', '#log');
@@ -2177,6 +2335,7 @@ const ACTIONS = {
     saveRest();
     updateRestBar();
   },
+  // Skips the rest of the rest period.
   'rest-skip': stopRest,
   // Opens the interval timer setup for a HIIT entry.
   'hiit-setup'(el) {
@@ -2223,6 +2382,7 @@ const ACTIONS = {
   },
   // Opens the picker to add an exercise to the day or a plan day.
   'open-add': (el) => openSheet({ mode: el.dataset.mode, wd: el.dataset.wd !== undefined ? Number(el.dataset.wd) : undefined }),
+  // Closes the exercise picker sheet.
   'close-sheet': closeSheet,
   // Filters the exercise picker by type.
   'sheet-kind'(el) {

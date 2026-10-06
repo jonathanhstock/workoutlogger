@@ -455,6 +455,81 @@ describe('workout logbook in the browser', () => {
     await context.close();
   });
 
+  test('consistency tracker: Log row, month calendar and missed days', async () => {
+    // The only past log is the seeded Sep 27, so tracking starts there. Today's
+    // streak numbers depend on what earlier tests logged, so they aren't checked.
+    const { context, page, errors } = await openApp();
+    const row = page.locator('button.habits');
+    await row.waitFor();
+    assert.equal(await row.locator('[data-habit="cardio"] .of').textContent(), '/4');
+    assert.equal(await row.locator('[data-habit="core"] .of').textContent(), '/2');
+    // Its accessible name contains the visible words, in order, so voice control can tap it by them.
+    assert.match(await row.getAttribute('aria-label'), /^\d+ streak, .*\. \d+ vacuum days in a row.*\d+ of 4 cardio this week\. \d+ of 2 core this week\./);
+
+    // The row opens the Consistency card on the Progress tab, scrolled to just under the sticky top bar.
+    await row.click();
+    assert.equal(await page.locator('.tabbar [aria-current="page"]').textContent().then((t) => t.trim()), 'Progress');
+    const [top, scrolled] = await page.evaluate(() => [document.getElementById('consistency').getBoundingClientRect().top, scrollY]);
+    assert.ok(scrolled > 0 && top >= 0 && top < 150, `card top ${top} after scrolling ${scrolled}`);
+
+    // This month: today is marked, past workout days with nothing logged are missed.
+    const cal = page.locator('#consistency');
+    // Finds a day in the consistency calendar.
+    const day = (d) => cal.locator(`.cal-day[data-date="${d}"]`);
+    assert.equal(await page.locator('#cal-title').textContent(), 'October 2026');
+    assert.equal(await day('2026-10-05').getAttribute('aria-current'), 'date');
+    assert.equal(await day('2026-10-01').getAttribute('data-status'), 'missed');
+    assert.equal(await day('2026-10-06').getAttribute('data-status'), 'future');
+    for (const [goal, planned] of [['workouts', '/7'], ['cardio', '/4'], ['core', '/2'], ['vacuum', '/7']]) {
+      const text = await cal.locator(`[data-goal="${goal}"] .num`).textContent();
+      assert.ok(text.endsWith(planned), `${goal}: ${text}`);
+    }
+
+    // September: the seeded day is done, the day before it was never judged.
+    const prev = page.getByRole('button', { name: 'Previous month' });
+    assert.equal(await page.getByRole('button', { name: 'Next month' }).isDisabled(), true);
+    await prev.click();
+    await page.locator('#cal-title', { hasText: 'September 2026' }).waitFor();
+    assert.equal(await prev.isDisabled(), true);
+    assert.equal(await day('2026-09-27').getAttribute('data-status'), 'done');
+    assert.match(await day('2026-09-27').getAttribute('aria-label'), /September 27: done/);
+    assert.equal(await day('2026-09-26').getAttribute('data-status'), 'before');
+    assert.equal(await day('2026-09-28').getAttribute('data-status'), 'missed');
+    assert.equal(await day('2026-09-30').getAttribute('data-status'), 'missed', 'an active-rest day with nothing logged');
+    assert.match(await cal.locator('p.hint').textContent(), /^September: 1 of 4 workouts · 3 missed · /);
+    // Rest has a visible shape in the legend, not just a faint fill.
+    const restSwatch = await cal.locator('.cal-sw[data-status="rest"]').evaluate((el) => [getComputedStyle(el).borderTopStyle, getComputedStyle(el).borderTopColor]);
+    assert.equal(restSwatch[0], 'dotted');
+    assert.notEqual(restSwatch[1], 'rgba(0, 0, 0, 0)');
+    await noHorizontalScroll(page);
+    await shot(page, '05b-consistency');
+
+    // A calendar day opens on the Log; the row only shows for the current week.
+    await day('2026-09-27').click();
+    assert.equal(await page.locator('.dayname').inputValue(), 'Chest & Triceps');
+    await page.locator('.daytitle .date', { hasText: 'September 27, 2026' }).waitFor();
+    assert.equal(await page.locator('button.habits').count(), 0);
+    // The week strip marks missed days with a dash and says so.
+    await page.getByRole('button', { name: 'Next day' }).click();
+    const missed = page.locator('.weekstrip button[data-date="2026-09-28"]');
+    assert.equal(await missed.getAttribute('data-status'), 'missed');
+    assert.match(await missed.getAttribute('aria-label'), /missed$/);
+    assert.equal(await page.locator('.weekstrip button[data-date="2026-10-04"]').getAttribute('data-status'), 'missed');
+    // Vacuums alone don't make a workout day partly done: the strip still agrees with the calendar.
+    const vac = card(page, 'Stomach Vacuum');
+    for (let i = 1; i <= 5; i++) {
+      await vac.getByRole('button', { name: /Complete next set/ }).click();
+      await vac.locator('.count', { hasText: `${i}/5` }).waitFor();
+    }
+    assert.equal(await missed.getAttribute('data-status'), 'missed');
+    // Progress keeps the month that was shown.
+    await page.getByRole('button', { name: 'Progress', exact: true }).click();
+    await page.locator('#cal-title', { hasText: 'September 2026' }).waitFor();
+    assert.match(await day('2026-09-28').getAttribute('aria-label'), /September 28: missed, vacuums done$/);
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
   test('data syncs between devices and settings apply', async () => {
     const desktop = await openApp(DESKTOP);
     await card(desktop.page, FLAT).locator('.count', { hasText: '2/4' }).waitFor();
@@ -617,6 +692,7 @@ describe('workout logbook in the browser', () => {
   test('pull down to sync, and the logo goes to today', async () => {
     const { context, page, errors } = await openApp();
     // A short pull does nothing; a long one syncs.
+    // Drags one finger down the page by `dy` pixels from near the top.
     const drag = (dy) =>
       page.evaluate((dy) => {
         // Builds a touch point at a height on the page.
