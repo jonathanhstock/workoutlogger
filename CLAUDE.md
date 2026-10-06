@@ -122,9 +122,37 @@ Notes for that migration:
 
 Not built yet. Roughly in order of usefulness for this app.
 
-1. **Weekly check-in summary**: workouts done vs. planned, total volume, PRs
-   hit, cardio minutes, vacuums done, and the 7-day weight trend, all from data
-   the app already has.
+1. **Weekly summary every Sunday** (planned, not built yet):
+   - **What it shows**, for the week ending that Sunday (Mon–Sun, or Sun–Sat
+     when `settings.weekStart` is 0), compared with the week before:
+     - workouts done vs. planned, missed days and extra days, plus the
+       workout and vacuum streaks (from `consistencyDays` /
+       `consistencyTotals` / `currentStreaks`);
+     - cardio sessions and minutes vs. the 4–5×/week goal, and core
+       sessions vs. 2–3×;
+     - vacuum days out of 7;
+     - total volume (`rangeSummary`) and the change from last week;
+     - new PRs this week (best e1RM, heaviest set, longest hold);
+     - 7-day average weight vs. last week (`bodyWeightAverage`);
+     - Fitbit averages when connected: steps, sleep, resting HR
+       (`state.health`);
+     - one line on what to focus on next week, e.g. "2 walks short of
+       your cardio goal".
+   - **Where it shows:**
+     - a "Week in review" card at the top of the Log on Sunday (and on
+       Monday, if Sunday was missed), dismissible;
+     - a "Weekly summaries" list in Progress to reread past weeks.
+   - **Sunday alert:** with Timer alerts on, the server pushes "Your week in
+     review is ready" on Sunday evening (around 7 pm local; store the
+     device's time-zone offset with the push subscription). This reuses
+     `web-push.js` with a weekly server timer, not the app-hidden schedule.
+   - **How to build it:**
+     - a pure `weeklyReview(state, weekStart, ctx)` in `model.js`, computed
+       on the fly from existing data, so nothing new is stored except a
+       `dismissed` week marker in settings;
+     - keep it O(days in the week) per the speed rule;
+     - unit tests for each number, and an e2e test that it shows on a
+       Sunday and not on a Wednesday.
 2. **Personal-record alerts**: a "New PR!" badge the moment a set beats the
    best e1RM, heaviest set or longest hold (PRs are already computed in
    Progress).
