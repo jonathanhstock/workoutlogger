@@ -584,8 +584,14 @@ function restAfter(entry, date = ui.date) {
     requestAnimationFrame(() => document.querySelector(`[data-entry-id="${next.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     return;
   }
-  // Cardio and stomach vacuums don't use rest periods.
-  if (entry.kind === 'cardio' || entry.kind === 'vacuum') return;
+  // Stomach vacuum holds run back to back: no rest, and a rest still
+  // counting from the exercise before stops.
+  if (entry.kind === 'vacuum') {
+    stopRest();
+    return;
+  }
+  // Cardio doesn't use rest periods.
+  if (entry.kind === 'cardio') return;
   // The partials-to-failure set follows the set before it back to back.
   if (M.nextIsFailureSet(entry)) {
     stopRest();

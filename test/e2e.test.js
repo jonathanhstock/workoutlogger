@@ -717,6 +717,26 @@ describe('workout logbook in the browser', () => {
     await context.close();
   });
 
+  test('stomach vacuum sets have no rest between them', async () => {
+    const { context, page, errors } = await openApp();
+    // Today's (Day 1) last lift leaves a rest timer running...
+    await card(page, 'Triceps Pushdown').getByRole('button', { name: /Complete next set/ }).click();
+    await page.locator('#rest [data-rest-time]').waitFor();
+    // ...and the first vacuum hold stops it; no hold starts a new one.
+    const vac = card(page, 'Stomach Vacuum');
+    for (let i = 0; i < 3; i++) {
+      const before = await vac.locator('.count').textContent();
+      await vac.getByRole('button', { name: /Complete next set/ }).click();
+      await page.waitForFunction(([b]) => {
+        const c = [...document.querySelectorAll('article.entry')].find((a) => a.querySelector('h3')?.textContent.includes('Stomach Vacuum'))?.querySelector('.count');
+        return c && c.textContent !== b;
+      }, [before]);
+      assert.equal(await page.locator('#rest').isHidden(), true);
+    }
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
   test('pull down to sync, and the logo goes to today', async () => {
     const { context, page, errors } = await openApp();
     // A short pull does nothing; a long one syncs.

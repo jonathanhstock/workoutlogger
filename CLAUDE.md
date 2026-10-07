@@ -70,7 +70,9 @@ Notes for that migration:
   sure that job passes.
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
   timer between linked exercises; rest after the last one in the group.
-  Stomach vacuums and cardio never use the rest timer.
+  Stomach vacuums and cardio never use the rest timer; a vacuum set also
+  stops a rest still running from the exercise before, so holds run back to
+  back.
 - Rest by lift type (`REST_CLASSES`, `restFor` in `model.js`; the compound
   list is `COMPOUND` in `program.js`, everything else is isolation):
   compound lifts (bench, squat, deadlift, rows, presses, pull-ups) default
