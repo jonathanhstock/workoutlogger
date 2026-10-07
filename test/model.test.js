@@ -1135,3 +1135,53 @@ describe('consistency', () => {
     assert.ok(ms < 500, `took ${ms.toFixed(0)} ms`);
   });
 });
+
+describe('rest times by lift type', () => {
+  test('compound lifts rest 90–120 s (max 180), isolation 60–75 s (max 120)', () => {
+    const s = fresh();
+    assert.equal(M.restClass(s, 'flat-barbell-bench'), 'compound');
+    assert.equal(M.restClass(s, 'squat'), 'compound');
+    assert.equal(M.restClass(s, 'rack-pull'), 'compound');
+    assert.equal(M.restClass(s, 'alt-curl'), 'isolation');
+    assert.equal(M.restClass(s, 'leg-extension'), 'isolation');
+    assert.equal(M.restClass(s, 'lateral-raise'), 'isolation');
+    assert.equal(M.restClass(s, 'plank'), null);
+    assert.equal(M.restClass(s, 'incline-walk'), null);
+    assert.equal(M.restFor(s, { exerciseId: 'squat', target: {} }), 120);
+    assert.equal(M.restFor(s, { exerciseId: 'alt-curl', target: {} }), 75);
+    assert.equal(M.restFor(s, { exerciseId: 'plank', target: {} }), 90);
+    // An exercise's own rest wins, but never past its type's maximum.
+    assert.equal(M.restFor(s, { exerciseId: 'rack-pull', target: { restSec: 150 } }), 150);
+    assert.equal(M.restFor(s, { exerciseId: 'rack-pull', target: { restSec: 300 } }), 180);
+    assert.equal(M.restFor(s, { exerciseId: 'alt-curl', target: { restSec: 200 } }), 120);
+    assert.equal(M.restMax(s, 'squat'), 180);
+    assert.equal(M.restMax(s, 'alt-curl'), 120);
+    // The defaults come from Settings, clamped to the maximum on load.
+    s.settings.restCompound = 90;
+    assert.equal(M.restFor(s, { exerciseId: 'squat', target: {} }), 90);
+    const n = M.normalizeState({ ...s, settings: { ...s.settings, restCompound: 400, restIsolation: 500 } });
+    assert.deepEqual([n.settings.restCompound, n.settings.restIsolation], [180, 120]);
+    assert.deepEqual([M.defaultState(0).settings.restCompound, M.defaultState(0).settings.restIsolation], [120, 75]);
+  });
+
+  test('the program no longer gives lateral raises a 45 s rest', () => {
+    const s = fresh();
+    const it = Object.values(s.plan).flatMap((d) => d.items).find((x) => x.exerciseId === 'lateral-raise');
+    assert.equal(it.restSec, undefined);
+  });
+
+  test('the set before the partials-to-failure set has no rest', () => {
+    const s = fresh();
+    const legs = Object.keys(s.plan).find((k) => s.plan[k].items.some((x) => x.exerciseId === 'leg-curl'));
+    const date = M.addDays(D1, Number(legs));
+    const e = M.sessionOrDraft(s, date).session.entries.find((x) => x.exerciseId === 'leg-curl');
+    const work = e.sets.filter((x) => !x.type);
+    assert.equal(e.sets[e.sets.length - 1].type, 'failure');
+    for (const x of work.slice(0, -1)) M.markSet(x, true);
+    assert.equal(M.nextIsFailureSet(e), false);
+    M.markSet(work[work.length - 1], true);
+    assert.equal(M.nextIsFailureSet(e), true);
+    M.markSet(e.sets[e.sets.length - 1], true);
+    assert.equal(M.nextIsFailureSet(e), false);
+  });
+});

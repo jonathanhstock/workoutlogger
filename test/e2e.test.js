@@ -147,12 +147,16 @@ describe('workout logbook in the browser', () => {
     await flat().getByRole('button', { name: /Complete next set/ }).click();
     await flat().locator('.count', { hasText: '1/4' }).waitFor();
     await page.locator('#rest .rest-sub', { hasText: `${FLAT} · 3 sets left` }).waitFor();
-    await page.locator('#rest [data-rest-time]', { hasText: '1:30' }).waitFor();
+    // Flat press is a compound lift: 2:00 rest by default, never more than 3:00.
+    await page.locator('#rest [data-rest-time]', { hasText: '2:00' }).waitFor();
     await page.clock.runFor(30000);
-    await page.locator('#rest [data-rest-time]', { hasText: '1:00' }).waitFor();
+    await page.locator('#rest [data-rest-time]', { hasText: '1:30' }).waitFor();
+    for (let i = 0; i < 4; i++) await page.getByRole('button', { name: '15 seconds more' }).click();
+    await page.locator('#rest [data-rest-time]', { hasText: '2:30' }).waitFor();
     await page.getByRole('button', { name: '15 seconds more' }).click();
-    await page.locator('#rest [data-rest-time]', { hasText: '1:15' }).waitFor();
-    await page.clock.runFor(76000);
+    await page.locator('#toast', { hasText: 'capped at 3m' }).waitFor();
+    await page.locator('#rest [data-rest-time]', { hasText: '2:30' }).waitFor();
+    await page.clock.runFor(151000);
     await page.locator('#rest.is-done', { hasText: 'Next set!' }).waitFor();
     await page.getByRole('button', { name: 'Skip' }).click();
     assert.equal(await page.locator('#rest').isHidden(), true);
@@ -536,8 +540,8 @@ describe('workout logbook in the browser', () => {
     await shot(desktop.page, '06-log-desktop');
 
     await desktop.page.getByRole('button', { name: 'Settings' }).click();
-    await desktop.page.getByRole('button', { name: 'Increase restSec' }).click();
-    await serverHas(desktop.page, (s) => s.settings.restSec === 105);
+    await desktop.page.getByRole('button', { name: 'Decrease restCompound' }).click();
+    await serverHas(desktop.page, (s) => s.settings.restCompound === 105);
     await shot(desktop.page, '07-settings');
 
     const phone = await openApp(PHONE);
@@ -685,6 +689,30 @@ describe('workout logbook in the browser', () => {
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.locator('#alerts-card', { hasText: 'On for this device' }).waitFor();
     await noHorizontalScroll(page);
+    assert.deepEqual(errors, []);
+    await context.close();
+  });
+
+  test('no rest before the partials-to-failure set; isolation lifts rest 75 s', async () => {
+    const { context, page, errors } = await openApp();
+    // Day 5 (Legs, four days from now) has leg curls with a +1 set of partials to failure.
+    for (let i = 0; i < 4; i++) await page.getByRole('button', { name: 'Next day' }).click();
+    const curl = card(page, 'Leg Curl (seated / lying)');
+    await curl.waitFor();
+    const done = () => curl.getByRole('button', { name: /Complete next set/ }).click();
+    await done();
+    // Leg curls are an isolation lift.
+    await page.locator('#rest [data-rest-time]', { hasText: '1:15' }).waitFor();
+    await done();
+    await done();
+    await page.locator('#rest [data-rest-time]').waitFor();
+    // The last working set leads straight into the partials: no rest timer.
+    await done();
+    await page.locator('#toast', { hasText: 'straight into your partials' }).waitFor();
+    assert.equal(await page.locator('#rest').isHidden(), true);
+    // After the partials, rest as usual.
+    await done();
+    await page.locator('#rest [data-rest-time]').waitFor();
     assert.deepEqual(errors, []);
     await context.close();
   });

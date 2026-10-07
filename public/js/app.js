@@ -205,7 +205,7 @@ const STEP = {
   calories: () => 10,
   avgHr: () => 1,
 };
-const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level', 'rounds']);
+const INTEGER = new Set(['reps', 'repsMax', 'sets', 'setsMax', 'warmupSets', 'dropSets', 'failureSets', 'restSec', 'restCompound', 'restIsolation', 'holdSec', 'calories', 'avgHr', 'cycleLength', 'level', 'rounds']);
 const MAX = { sets: 50, setsMax: 50, reps: 1000, repsMax: 1000, warmupSets: 10, dropSets: 10, failureSets: 10, restSec: 1800, holdSec: 3600, avgHr: 260, speed: 30, incline: 40, level: 30, rounds: 50 };
 
 // Clamps and rounds a typed or stepped value to what the field allows.
@@ -234,6 +234,8 @@ function fmtInput(v) {
 const SETTING_RULES = {
   weightStep: { step: 0.5, min: 0.25, max: 100 },
   restSec: { step: 15, min: 0, max: 900 },
+  restCompound: { step: 15, min: 15, max: M.REST_CLASSES.compound.max },
+  restIsolation: { step: 15, min: 15, max: M.REST_CLASSES.isolation.max },
   cycleLength: { step: 1, min: 2, max: M.MAX_PLAN_DAYS },
 };
 
@@ -247,6 +249,8 @@ function changeValue(d, fn) {
       const it = day?.items.find((i) => i.id === d.item);
       if (!it) return;
       it[key] = cleanValue(key, fn(it[key] || 0, step));
+      // Rest never goes past the maximum for the lift type.
+      if (key === 'restSec') it[key] = Math.min(it[key], M.restMax(s, it.exerciseId));
       // Editing sets or reps by hand replaces a pyramid scheme.
       if ((key === 'sets' || key === 'reps') && it.repScheme) delete it.repScheme;
       day.updatedAt = Date.now();
@@ -283,7 +287,8 @@ function changeValue(d, fn) {
     } else if (scope === 'cardio') {
       e.cardio[key] = cleanValue(key, fn(e.cardio[key] || 0, step));
     } else if (scope === 'target') {
-      const v = cleanValue(key, fn(e.target[key] || 0, step));
+      let v = cleanValue(key, fn(e.target[key] || 0, step));
+      if (key === 'restSec') v = Math.min(v, M.restMax(S(), e.exerciseId));
       if (key === 'sets' && e.kind !== 'cardio') {
         delete e.target.repScheme;
         M.setTargetSets(e, v);
@@ -500,9 +505,9 @@ function beep(freq = 880, count = 3) {
 }
 
 // Starts the rest timer for the given number of seconds.
-function startRest(sec, label) {
+function startRest(sec, label, max = 1800) {
   if (!sec) return;
-  rest = { endsAt: Date.now() + sec * 1000, total: sec, label, done: false };
+  rest = { endsAt: Date.now() + sec * 1000, total: sec, label, done: false, max };
   saveRest();
   buildRestBar();
 }
@@ -580,11 +585,17 @@ function restAfter(entry, date = ui.date) {
     return;
   }
   // Cardio and stomach vacuums don't use rest periods.
-  if (!st.autoRest || entry.kind === 'cardio' || entry.kind === 'vacuum') return;
-  const sec = entry.target.restSec || st.restSec;
+  if (entry.kind === 'cardio' || entry.kind === 'vacuum') return;
+  // The partials-to-failure set follows the set before it back to back.
+  if (M.nextIsFailureSet(entry)) {
+    stopRest();
+    toast('No rest: straight into your partials to failure');
+    return;
+  }
+  if (!st.autoRest) return;
   const name = M.exerciseName(S(), entry.exerciseId);
   const left = entry.sets.filter((s) => !s.done).length;
-  startRest(sec, left ? `${name} · ${left} set${left === 1 ? '' : 's'} left` : `${name} done · next exercise`);
+  startRest(M.restFor(S(), entry), left ? `${name} · ${left} set${left === 1 ? '' : 's'} left` : `${name} done · next exercise`, M.restMax(S(), entry.exerciseId));
 }
 
 // ---------------------------------------------------------------------------
@@ -885,7 +896,7 @@ function targetEditor(e, prev) {
     cmp = `Last time (${fmtDate(prev.date)}): <b>${targetText(pt, e.kind)}</b> → ${diffs.length ? diffs.join(', ') : '<span class="delta flat">same target</span>'}`;
   }
   return `<div class="target-edit">${fields}<div class="compare">${cmp}</div>
-    <p class="hint">Changes apply to this day only and fill the sets you haven't done yet. To change it for every rotation, use “Save as my plan” or the Plan tab. Rest 0 = your default (${fmt(S().settings.restSec)}s).</p></div>`;
+    <p class="hint">Changes apply to this day only and fill the sets you haven't done yet. To change it for every rotation, use “Save as my plan” or the Plan tab. Rest 0 = the default for ${M.restClass(S(), e.exerciseId) ? `${M.restClass(S(), e.exerciseId)} lifts` : 'this exercise'} (${fmtSec(M.defaultRest(S(), e.exerciseId))}, max ${fmtSec(M.restMax(S(), e.exerciseId))}).</p></div>`;
 }
 
 // Builds the intensity tracker comparing last time’s load with today’s.
@@ -1840,7 +1851,9 @@ function settingsView() {
   <section class="card">
     <h3>Rest timer</h3>
     <div class="settings-row"><span>Start automatically after each set</span>${seg('set-autorest', st.autoRest, [[true, 'On'], [false, 'Off']])}</div>
-    <div class="settings-row"><span>Default rest (seconds)</span>${stepper({ scope: 'setting', key: 'restSec', value: st.restSec })}</div>
+    <div class="settings-row"><span>Compound lifts (bench, squat, deadlift, rows, presses) · 90–120 s, max 180 s</span>${stepper({ scope: 'setting', key: 'restCompound', value: st.restCompound })}</div>
+    <div class="settings-row"><span>Isolation lifts (curls, leg extensions, lateral raises) · 60–75 s, max 120 s</span>${stepper({ scope: 'setting', key: 'restIsolation', value: st.restIsolation })}</div>
+    <div class="settings-row"><span>Planks and other holds (seconds)</span>${stepper({ scope: 'setting', key: 'restSec', value: st.restSec })}</div>
     <div class="settings-row"><span>Sound when rest is over</span>${seg('set-restsound', st.restSound, [[true, 'On'], [false, 'Off']])}</div>
     <p class="hint">Exercises can have their own rest time (Plan tab → More options). Phones may silence sounds while the screen is locked; the timer still keeps time.</p>
   </section>
@@ -2328,9 +2341,12 @@ const ACTIONS = {
   // Adds or removes 15 seconds of rest.
   'rest-add'(el) {
     if (!rest) return;
-    const left = Math.max(0, rest.endsAt - Date.now());
-    rest.endsAt = Date.now() + Math.max(0, left + Number(el.dataset.delta) * 1000);
-    rest.total = Math.max(rest.total + Number(el.dataset.delta), 1);
+    // +15 never takes the whole rest past the maximum for the lift type.
+    const elapsed = rest.total - Math.max(0, rest.endsAt - Date.now()) / 1000;
+    const total = Math.max(1, Math.min(rest.max || 1800, rest.total + Number(el.dataset.delta)));
+    if (total === rest.total) return toast(`Rest is capped at ${fmtSec(rest.max)} for this lift`);
+    rest.endsAt = Date.now() + Math.max(0, total - elapsed) * 1000;
+    rest.total = total;
     rest.done = false;
     saveRest();
     updateRestBar();

@@ -71,6 +71,15 @@ Notes for that migration:
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
   timer between linked exercises; rest after the last one in the group.
   Stomach vacuums and cardio never use the rest timer.
+- Rest by lift type (`REST_CLASSES`, `restFor` in `model.js`; the compound
+  list is `COMPOUND` in `program.js`, everything else is isolation):
+  compound lifts (bench, squat, deadlift, rows, presses, pull-ups) default
+  120 s (90–120 s, never more than 180 s); isolation lifts (curls, leg
+  extensions, lateral raises) default 75 s (60–75 s, max 120 s). An
+  exercise's own rest wins but is capped at its type's max, and so is +15
+  on the timer. Planks and other holds use `settings.restSec`. No rest
+  before a partials-to-failure set (`nextIsFailureSet`): it follows the
+  last working set back to back.
 - Speed: the server gzips/brotlis app files once and answers revalidation with
   ETag 304s; syncs are gzipped both ways and get an empty 204 when nothing is
   newer. The browser keeps one IndexedDB row per record (`store.js`), so a tap

@@ -34,8 +34,11 @@ offline.
 - **Edit targets for one day.** Use "Edit target" to change sets, reps, weight,
   warm-ups, drop sets or rest for that day only. You see how it compares with
   last time.
-- **Rest timer between sets.** It starts automatically, and you can add or
-  remove 15 s or skip. It beeps and vibrates when rest is over. The app also
+- **Rest timer between sets.** It starts automatically: 2:00 for compound
+  lifts (bench, squat, deadlift; 90–120 s, never over 3:00) and 1:15 for
+  isolation lifts (curls, extensions, raises; 60–75 s, never over 2:00), both
+  adjustable in Settings. There's no rest before a partials-to-failure set.
+  You can add or remove 15 s or skip. It beeps and vibrates when rest is over. The app also
   records how long you actually rested.
 - **RPE per exercise** (5–10) is shown next to last time's RPE.
 - **Timer alerts.** When rest ends, at each HIIT interval switch, and when a
