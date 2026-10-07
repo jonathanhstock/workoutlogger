@@ -377,7 +377,6 @@ html, body { overscroll-behavior-y: none; }
 button.idx:hover { background: var(--surface-2); }
 .set-row.t-warmup .idx { color: var(--bad); }
 .set-row.t-drop .idx, .set-row.t-failure .idx { color: var(--accent); }
-.set-row.t-warmup .stepper input { color: var(--text-2); font-weight: 500; }
 .set-legend { font-size: 11px; }
 .set-row.hold { grid-template-columns: 22px minmax(0, 1fr) 76px 44px; }
 .set-head.hold { grid-template-columns: 22px minmax(0, 1fr) 76px 44px; }
