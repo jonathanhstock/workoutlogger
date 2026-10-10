@@ -380,8 +380,9 @@ export function createGoogleHealth({ dataDir, clientId = '', clientSecret = '', 
     running = (async () => {
       // Start from the last import that fully worked (minus a few days for
       // late watch syncs), so a failed import never leaves a gap. Google's
-      // daily roll-ups cover at most 90 days.
-      const good = saved.lastGood ? iso(new Date(saved.lastGood)) : '';
+      // daily roll-ups cover at most 90 days. A last import dated after
+      // `today` (a clock or time-zone skew) never pushes the start past it.
+      const good = saved.lastGood ? [iso(new Date(saved.lastGood)), today].sort()[0] : '';
       const from = [good ? addDays(good, -OVERLAP_DAYS) : addDays(today, -(FIRST_DAYS - 1)), addDays(today, -(MAX_DAYS - 2))].sort().pop();
       // Ask through tomorrow: Google dates are in your time zone, the server's are UTC.
       const result = { ...(await fetchRange(from, addDays(today, 1))), from, to: today };
