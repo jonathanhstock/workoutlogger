@@ -107,6 +107,18 @@ export const EXERCISES = [
   ['barbell-snatch', 'Barbell Snatch', 'strength', 'Full body'],
 ];
 
+// Rest between sets by lift type (Settings has the defaults):
+//   compound (bench, squat, deadlift, rows, presses, pull-ups): 90–120 s, 180 s max
+//   isolation (curls, leg extensions, lateral raises, flyes): 60–75 s, 120 s max
+// Every strength exercise not listed here counts as isolation.
+export const COMPOUND = new Set([
+  'push-up', 'incline-machine-press', 'incline-db-press', 'flat-press', 'dips', 'incline-barbell-bench', 'flat-barbell-bench', 'inner-chest-press', 'close-grip-bench',
+  'pull-up', 'pull-up-wide', 'lat-pulldown-wide', 'lat-pulldown-close', 'row', 'single-arm-row', 'seated-row', 'back-machine', 'rack-pull', 'supinated-db-row',
+  'shoulder-press', 'upright-row',
+  'squat', 'leg-press', 'sldl', 'lunge',
+  'hang-clean', 'barbell-snatch',
+]);
+
 // Item helpers. `x` takes optional extras: setsMax, repsMax, scheme,
 // warm (warm-up sets), warmReps, drop, fail, rest (sec), note, opt.
 const s = (exerciseId, sets, reps, x = {}) => ({
@@ -321,7 +333,7 @@ export const PLAN = {
         warmupBike,
         s('pull-up', 2, 10, { setsMax: 3, note: 'Warm-up (assisted if needed)' }),
         s('reverse-pec-deck', 3, 15, { scheme: [15, 15, 12] }),
-        s('lateral-raise', 3, 10, { setsMax: 4, repsMax: 12, rest: 45, opt: true, note: '35–50 sec rest' }),
+        s('lateral-raise', 3, 10, { setsMax: 4, repsMax: 12, opt: true }),
         s('shoulder-press', 3, 8, { setsMax: 4, repsMax: 10, warm: 1, warmReps: 12, drop: 1 }),
         s('front-raise', 3, 10, { setsMax: 4, note: 'Alternating DB (hammer grip), EZ bar or cables' }),
         s('cable-lateral', 3, 10, { setsMax: 4, note: 'Per arm, behind the back or in front' }),

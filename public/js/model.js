@@ -2,7 +2,7 @@
 // Shared by the browser app, the Node server (for merging) and the tests,
 // so nothing in here may touch the DOM, storage or the network.
 
-import { EXERCISES, PLAN } from './program.js';
+import { COMPOUND, EXERCISES, PLAN } from './program.js';
 
 export const SCHEMA_VERSION = 2;
 
@@ -178,6 +178,44 @@ function stamp(rec, t) {
   return rec;
 }
 
+/**
+ * Rest between sets by lift type: compound lifts (bench, squat, deadlift)
+ * 90–120 s and never more than 180 s; isolation lifts (curls, leg
+ * extensions, lateral raises) 60–75 s and never more than 120 s.
+ */
+export const REST_CLASSES = {
+  compound: { label: 'Compound', range: '90–120 s', def: 90, max: 180, setting: 'restCompound' },
+  isolation: { label: 'Isolation', range: '60–75 s', def: 60, max: 120, setting: 'restIsolation' },
+};
+
+/** Whether a strength exercise rests like a compound or an isolation lift (null for holds and cardio). */
+export function restClass(state, exerciseId) {
+  const kind = state.exercises[exerciseId]?.kind || 'strength';
+  if (kind !== 'strength') return null;
+  return COMPOUND.has(exerciseId) ? 'compound' : 'isolation';
+}
+
+/** The longest rest allowed after a set of this exercise, in seconds. */
+export function restMax(state, exerciseId) {
+  return REST_CLASSES[restClass(state, exerciseId)]?.max ?? 1800;
+}
+
+/** The rest to take after a set of this exercise when it has no rest of its own. */
+export function defaultRest(state, exerciseId) {
+  const cls = restClass(state, exerciseId);
+  return cls ? state.settings[REST_CLASSES[cls].setting] || REST_CLASSES[cls].def : state.settings.restSec;
+}
+
+/** Seconds to rest after a set of this entry: its own rest or the default for its lift type, capped at the type's maximum. */
+export function restFor(state, entry) {
+  return Math.min(restMax(state, entry.exerciseId), entry.target?.restSec || defaultRest(state, entry.exerciseId));
+}
+
+/** True when the next unfinished set is the partials-to-failure set, which follows the last one with no rest. */
+export function nextIsFailureSet(entry) {
+  return (entry.sets || []).find((x) => !x.done)?.type === 'failure';
+}
+
 /** Settings for a new logbook: US units and the program's rotation. */
 export function defaultSettings(ts) {
   return {
@@ -188,7 +226,9 @@ export function defaultSettings(ts) {
     planMode: PLAN.mode,
     cycleLength: PLAN.length,
     cycleStart: PLAN.start || todayISO(),
-    restSec: 90,
+    restSec: 60, // planks and other timed holds
+    restCompound: 90,
+    restIsolation: 60,
     autoRest: true,
     restSound: true,
     updatedAt: ts,
@@ -251,6 +291,9 @@ export function normalizeState(input) {
   const st = { ...defaultSettings(0), ...inSettings };
   // Logbooks from before rotations existed were weekly.
   if (isObj(input.settings) && !inSettings.planMode) st.planMode = 'weekly';
+  // Logbooks from before rest by lift type kept the old 90 s default for
+  // everything; holds now rest 1:00 like isolation lifts.
+  if (isObj(input.settings) && !('restCompound' in inSettings) && Number(inSettings.restSec) === 90) st.restSec = 60;
   const out = {
     schemaVersion: SCHEMA_VERSION,
     settings: {
@@ -265,6 +308,8 @@ export function normalizeState(input) {
       // program's start date, so every device and the server agree on it.
       cycleStart: followsProgram(st) && PLAN.start ? PLAN.start : isISODate(st.cycleStart) ? st.cycleStart : todayISO(),
       restSec: Math.round(clampNum(st.restSec, 0, 1800)),
+      restCompound: Math.round(clampNum(st.restCompound, 15, REST_CLASSES.compound.max)) || REST_CLASSES.compound.def,
+      restIsolation: Math.round(clampNum(st.restIsolation, 15, REST_CLASSES.isolation.max)) || REST_CLASSES.isolation.def,
       autoRest: st.autoRest !== false,
       restSound: st.restSound !== false,
       updatedAt: Number(st.updatedAt) || 0,

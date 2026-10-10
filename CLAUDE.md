@@ -69,8 +69,20 @@ Notes for that migration:
   changes and every Monday); add new links there and make
   sure that job passes.
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
-  timer between linked exercises; rest after the last one in the group.
-  Stomach vacuums and cardio never use the rest timer.
+  timer between linked exercises; rest after the last one in the group. The app
+  never scrolls on its own after a set; a toast names the next exercise.
+  Stomach vacuums and cardio never use the rest timer; a vacuum set also
+  stops a rest still running from the exercise before, so holds run back to
+  back.
+- Rest by lift type (`REST_CLASSES`, `restFor` in `model.js`; the compound
+  list is `COMPOUND` in `program.js`, everything else is isolation):
+  compound lifts (bench, squat, deadlift, rows, presses, pull-ups) default
+  90 s (90–120 s, never more than 180 s); isolation lifts (curls, leg
+  extensions, lateral raises) default 60 s (60–75 s, max 120 s). An
+  exercise's own rest wins but is capped at its type's max, and so is +15
+  on the timer. Planks and other holds use `settings.restSec` (default 60 s). No rest
+  before a partials-to-failure set (`nextIsFailureSet`): it follows the
+  last working set back to back.
 - Speed: the server gzips/brotlis app files once and answers revalidation with
   ETag 304s; syncs are gzipped both ways and get an empty 204 when nothing is
   newer. The browser keeps one IndexedDB row per record (`store.js`), so a tap
@@ -122,9 +134,37 @@ Notes for that migration:
 
 Not built yet. Roughly in order of usefulness for this app.
 
-1. **Weekly check-in summary**: workouts done vs. planned, total volume, PRs
-   hit, cardio minutes, vacuums done, and the 7-day weight trend, all from data
-   the app already has.
+1. **Weekly summary every Sunday** (planned, not built yet):
+   - **What it shows**, for the week ending that Sunday (Mon–Sun, or Sun–Sat
+     when `settings.weekStart` is 0), compared with the week before:
+     - workouts done vs. planned, missed days and extra days, plus the
+       workout and vacuum streaks (from `consistencyDays` /
+       `consistencyTotals` / `currentStreaks`);
+     - cardio sessions and minutes vs. the 4–5×/week goal, and core
+       sessions vs. 2–3×;
+     - vacuum days out of 7;
+     - total volume (`rangeSummary`) and the change from last week;
+     - new PRs this week (best e1RM, heaviest set, longest hold);
+     - 7-day average weight vs. last week (`bodyWeightAverage`);
+     - Fitbit averages when connected: steps, sleep, resting HR
+       (`state.health`);
+     - one line on what to focus on next week, e.g. "2 walks short of
+       your cardio goal".
+   - **Where it shows:**
+     - a "Week in review" card at the top of the Log on Sunday (and on
+       Monday, if Sunday was missed), dismissible;
+     - a "Weekly summaries" list in Progress to reread past weeks.
+   - **Sunday alert:** with Timer alerts on, the server pushes "Your week in
+     review is ready" on Sunday evening (around 7 pm local; store the
+     device's time-zone offset with the push subscription). This reuses
+     `web-push.js` with a weekly server timer, not the app-hidden schedule.
+   - **How to build it:**
+     - a pure `weeklyReview(state, weekStart, ctx)` in `model.js`, computed
+       on the fly from existing data, so nothing new is stored except a
+       `dismissed` week marker in settings;
+     - keep it O(days in the week) per the speed rule;
+     - unit tests for each number, and an e2e test that it shows on a
+       Sunday and not on a Wednesday.
 2. **Personal-record alerts**: a "New PR!" badge the moment a set beats the
    best e1RM, heaviest set or longest hold (PRs are already computed in
    Progress).
