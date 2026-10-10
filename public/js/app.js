@@ -580,8 +580,8 @@ function restAfter(entry, date = ui.date) {
   const next = M.supersetNext(session, entry.id);
   if (next) {
     stopRest();
+    // Just say where to go next; the page stays put so you scroll at your own pace.
     toast(`Superset: straight to ${M.exerciseName(S(), next.exerciseId)}`);
-    requestAnimationFrame(() => document.querySelector(`[data-entry-id="${next.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     return;
   }
   // Stomach vacuum holds run back to back: no rest, and a rest still

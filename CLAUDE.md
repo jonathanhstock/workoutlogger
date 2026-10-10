@@ -69,7 +69,8 @@ Notes for that migration:
   changes and every Monday); add new links there and make
   sure that job passes.
 - Supersets: `target.supersetNext` links an exercise to the next one. No rest
-  timer between linked exercises; rest after the last one in the group.
+  timer between linked exercises; rest after the last one in the group. The app
+  never scrolls on its own after a set; a toast names the next exercise.
   Stomach vacuums and cardio never use the rest timer; a vacuum set also
   stops a rest still running from the exercise before, so holds run back to
   back.

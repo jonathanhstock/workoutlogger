@@ -305,9 +305,15 @@ describe('workout logbook in the browser', () => {
     await press().locator('.badge.ss').waitFor();
     await page.locator('.ss-link', { hasText: 'no rest between' }).first().waitFor();
     // First exercise of the superset: no rest, straight to the next.
-    await press().getByRole('button', { name: /Complete next set/ }).click();
+    const plus = press().getByRole('button', { name: /Complete next set/ });
+    await plus.scrollIntoViewIfNeeded();
+    const y0 = await page.evaluate(() => scrollY);
+    await plus.click();
     await page.locator('#toast', { hasText: 'Superset: straight to Incline Dumbbell Fly' }).waitFor();
     assert.equal(await page.locator('#rest').isHidden(), true);
+    // The page stays where it was: you scroll to the next exercise yourself.
+    await page.waitForTimeout(700);
+    assert.equal(await page.evaluate(() => scrollY), y0);
     // Second exercise: now rest before the next round.
     await fly().getByRole('button', { name: /Complete next set/ }).click();
     await page.locator('#rest .rest-sub', { hasText: 'Incline Dumbbell Fly' }).waitFor();
