@@ -1147,9 +1147,9 @@ describe('rest times by lift type', () => {
     assert.equal(M.restClass(s, 'lateral-raise'), 'isolation');
     assert.equal(M.restClass(s, 'plank'), null);
     assert.equal(M.restClass(s, 'incline-walk'), null);
-    assert.equal(M.restFor(s, { exerciseId: 'squat', target: {} }), 120);
-    assert.equal(M.restFor(s, { exerciseId: 'alt-curl', target: {} }), 75);
-    assert.equal(M.restFor(s, { exerciseId: 'plank', target: {} }), 90);
+    assert.equal(M.restFor(s, { exerciseId: 'squat', target: {} }), 90);
+    assert.equal(M.restFor(s, { exerciseId: 'alt-curl', target: {} }), 60);
+    assert.equal(M.restFor(s, { exerciseId: 'plank', target: {} }), 60);
     // An exercise's own rest wins, but never past its type's maximum.
     assert.equal(M.restFor(s, { exerciseId: 'rack-pull', target: { restSec: 150 } }), 150);
     assert.equal(M.restFor(s, { exerciseId: 'rack-pull', target: { restSec: 300 } }), 180);
@@ -1157,11 +1157,21 @@ describe('rest times by lift type', () => {
     assert.equal(M.restMax(s, 'squat'), 180);
     assert.equal(M.restMax(s, 'alt-curl'), 120);
     // The defaults come from Settings, clamped to the maximum on load.
-    s.settings.restCompound = 90;
-    assert.equal(M.restFor(s, { exerciseId: 'squat', target: {} }), 90);
+    s.settings.restCompound = 105;
+    assert.equal(M.restFor(s, { exerciseId: 'squat', target: {} }), 105);
     const n = M.normalizeState({ ...s, settings: { ...s.settings, restCompound: 400, restIsolation: 500 } });
     assert.deepEqual([n.settings.restCompound, n.settings.restIsolation], [180, 120]);
-    assert.deepEqual([M.defaultState(0).settings.restCompound, M.defaultState(0).settings.restIsolation], [120, 75]);
+    assert.deepEqual([M.defaultState(0).settings.restCompound, M.defaultState(0).settings.restIsolation], [90, 60]);
+  });
+
+  test('logbooks from before rest by lift type move holds from the old 90 s default to 60 s', () => {
+    const old = M.defaultState(0);
+    delete old.settings.restCompound;
+    delete old.settings.restIsolation;
+    assert.equal(M.normalizeState({ ...old, settings: { ...old.settings, restSec: 90 } }).settings.restSec, 60);
+    // A rest someone picked themselves is kept, and so is 90 s once the new settings exist.
+    assert.equal(M.normalizeState({ ...old, settings: { ...old.settings, restSec: 45 } }).settings.restSec, 45);
+    assert.equal(M.normalizeState({ ...old, settings: { ...old.settings, restSec: 90, restCompound: 90 } }).settings.restSec, 90);
   });
 
   test('the program no longer gives lateral raises a 45 s rest', () => {

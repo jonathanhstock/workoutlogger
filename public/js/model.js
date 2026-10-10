@@ -184,8 +184,8 @@ function stamp(rec, t) {
  * extensions, lateral raises) 60–75 s and never more than 120 s.
  */
 export const REST_CLASSES = {
-  compound: { label: 'Compound', range: '90–120 s', def: 120, max: 180, setting: 'restCompound' },
-  isolation: { label: 'Isolation', range: '60–75 s', def: 75, max: 120, setting: 'restIsolation' },
+  compound: { label: 'Compound', range: '90–120 s', def: 90, max: 180, setting: 'restCompound' },
+  isolation: { label: 'Isolation', range: '60–75 s', def: 60, max: 120, setting: 'restIsolation' },
 };
 
 /** Whether a strength exercise rests like a compound or an isolation lift (null for holds and cardio). */
@@ -226,9 +226,9 @@ export function defaultSettings(ts) {
     planMode: PLAN.mode,
     cycleLength: PLAN.length,
     cycleStart: PLAN.start || todayISO(),
-    restSec: 90, // planks and other timed holds
-    restCompound: 120,
-    restIsolation: 75,
+    restSec: 60, // planks and other timed holds
+    restCompound: 90,
+    restIsolation: 60,
     autoRest: true,
     restSound: true,
     updatedAt: ts,
@@ -291,6 +291,9 @@ export function normalizeState(input) {
   const st = { ...defaultSettings(0), ...inSettings };
   // Logbooks from before rotations existed were weekly.
   if (isObj(input.settings) && !inSettings.planMode) st.planMode = 'weekly';
+  // Logbooks from before rest by lift type kept the old 90 s default for
+  // everything; holds now rest 1:00 like isolation lifts.
+  if (isObj(input.settings) && !('restCompound' in inSettings) && Number(inSettings.restSec) === 90) st.restSec = 60;
   const out = {
     schemaVersion: SCHEMA_VERSION,
     settings: {
