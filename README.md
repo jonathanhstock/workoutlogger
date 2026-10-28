@@ -133,7 +133,7 @@ sent to the browser or included in backups.
 
 ## Run it locally
 
-Requires Node.js 18 or newer. There are no runtime dependencies.
+Requires Node.js 22.23.4 or newer (the app runs on Node 22). There are no runtime dependencies.
 
 ```bash
 npm start                # http://localhost:3000

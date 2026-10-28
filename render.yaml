@@ -12,7 +12,7 @@ services:
     autoDeploy: true
     envVars:
       - key: NODE_VERSION
-        value: "22"
+        value: "22.23.4"
       - key: DATA_DIR
         value: /var/data
       - key: APP_PASSWORD

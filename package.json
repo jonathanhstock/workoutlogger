@@ -6,7 +6,7 @@
   "private": true,
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.23.4"
   },
   "scripts": {
     "start": "node server.js",
